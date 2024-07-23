@@ -71,7 +71,41 @@ void App::initialize(Application& self)
 
     LOG_INF() << "Initialize message-proxy: version = " << AOS_MESSAGE_PROXY_VERSION;
 
-    // Initialize Aos modules
+    // Initialize modules
+    mIAMChannel.emplace(mIAMChannelFactory.GetChannel());
+    mIAMReverseChannel.emplace(mIAMChannel->GetReverse());
+
+    mCMChannel.emplace(mCMChannelFactory.GetChannel());
+    mCMReverseChannel.emplace(mCMChannel->GetReverse());
+
+    err = mCryptoProvider.Init();
+    AOS_ERROR_CHECK_AND_THROW("can't initialize crypto provider", err);
+
+    err = mCertLoader.Init(mCryptoProvider, mPKCS11Manager);
+    AOS_ERROR_CHECK_AND_THROW("can't initialize cert loader", err);
+
+    auto retConfig = ParseConfig(mConfigFile);
+    AOS_ERROR_CHECK_AND_THROW("can't parse config", retConfig.mError);
+
+    mConfig = retConfig.mValue;
+
+    err = mIAMClient.Init(mConfig, mCertLoader, mCryptoProvider, mIAMChannel.value(), mProvisioning);
+    AOS_ERROR_CHECK_AND_THROW("can't initialize IAM client", err);
+
+    err = mCMClient.Init(mConfig, mIAMClient, mCertLoader, mCryptoProvider, mCMChannel.value(), mProvisioning);
+    AOS_ERROR_CHECK_AND_THROW("can't initialize CM client", err);
+
+    mVChanManager.emplace(mConfig);
+
+    if (mProvisioning) {
+        err = mCommunicationManager.Init(
+            mConfig, mVChanManager.value(), mIAMReverseChannel.value(), mCMReverseChannel.value());
+    } else {
+        err = mCommunicationManager.Init(mConfig, mVChanManager.value(), mIAMReverseChannel.value(),
+            mCMReverseChannel.value(), &mIAMClient, &mCertLoader, &mCryptoProvider);
+    }
+
+    AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
 
     // Notify systemd
 
@@ -84,6 +118,11 @@ void App::initialize(Application& self)
 void App::uninitialize()
 {
     LOG_INF() << "Uninitialize message-proxy";
+
+    mIAMChannelFactory.Close();
+    mCMChannelFactory.Close();
+    mVChanManager->Close();
+    mCommunicationManager.Close();
 
     Application::uninitialize();
 }

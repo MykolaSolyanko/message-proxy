@@ -33,4 +33,16 @@ add_library(${TARGET} STATIC ${SOURCES})
 # Libraries
 # ######################################################################################################################
 
-target_link_libraries(${TARGET} PUBLIC aoslogger aosutils aoscommon Poco::Foundation Poco::Util)
+target_link_libraries(
+    ${TARGET}
+    PUBLIC aoscommon
+           aoslogger
+           aosutils
+           cmclient
+           communication
+           config
+           iamclient
+           mbedtls
+           Poco::Foundation
+           Poco::Util
+)
