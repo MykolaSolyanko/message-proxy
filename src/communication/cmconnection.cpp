@@ -42,8 +42,8 @@ aos::Error CMConnection::Init(const Config& cfg, CertProviderItf* certProvider, 
     }
 
     StartTask([this] { RunOpenChannel(); });
-    StartTask([this] { RunSecureChannel(); });
-    StartTask([this] { RunFilterMessage(); });
+    // StartTask([this] { RunSecureChannel(); });
+    // StartTask([this] { RunFilterMessage(); });
 
     return aos::ErrorEnum::eNone;
 }
@@ -53,6 +53,11 @@ void CMConnection::Close()
     LOG_DBG() << "Close CMConnection";
 
     mShutdown = true;
+
+    {
+        std::lock_guard<std::mutex> lock(mMutex);
+        mCondVar.notify_all();
+    }
 
     mOpenMsgChannel.Close();
     mCMCommOpenChannel->Close();
@@ -82,6 +87,10 @@ void CMConnection::RunSecureChannel()
         if (auto err = mCMCommSecureChannel->Connect(); !err.IsNone()) {
             LOG_ERR() << "Failed to connect error=" << err;
 
+            std::unique_lock<std::mutex> lock(mMutex);
+
+            mCondVar.wait_for(lock, cConnectionTimeout, [this]() { return mShutdown.load(); });
+
             continue;
         }
 
@@ -99,11 +108,15 @@ void CMConnection::RunSecureChannel()
 
 void CMConnection::RunOpenChannel()
 {
-    LOG_DBG() << "Run open channel";
+    LOG_DBG() << "Run CM open channel";
 
     while (!mShutdown) {
         if (auto err = mCMCommOpenChannel->Connect(); !err.IsNone()) {
-            LOG_ERR() << "Failed to connect error=" << err;
+            LOG_ERR() << "Failed to connect CM error=" << err;
+
+            std::unique_lock<std::mutex> lock(mMutex);
+
+            mCondVar.wait_for(lock, cConnectionTimeout, [this]() { return mShutdown.load(); });
 
             continue;
         }
@@ -357,9 +370,9 @@ void CMConnection::ReadOpenMsgHandler()
         if (outgoingMessages.has_clock_sync_request()) {
             if (auto err = SendSMClockSync(); !err.IsNone()) {
                 LOG_ERR() << "Failed to send clock sync error=" << err;
-
-                continue;
             }
+
+            continue;
         }
 
         if (auto err = mChannel->Send(message); !err.IsNone()) {

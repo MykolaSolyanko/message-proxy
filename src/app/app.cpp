@@ -20,6 +20,7 @@
 #include "app.hpp"
 #include "logger/logmodule.hpp"
 // cppcheck-suppress missingInclude
+#include "communication/pipe_test.hpp"
 #include "version.hpp"
 
 /***********************************************************************************************************************
@@ -58,6 +59,12 @@ static void RegisterSegfaultSignal()
 
 void App::initialize(Application& self)
 {
+    if (mTestMode) {
+        RunPipeTest();
+
+        return;
+    }
+
     if (mStopProcessing) {
         return;
     }
@@ -117,6 +124,10 @@ void App::initialize(Application& self)
 
 void App::uninitialize()
 {
+    if (mTestMode) {
+        return;
+    }
+
     LOG_INF() << "Uninitialize message-proxy";
 
     mIAMChannelFactory.Close();
@@ -165,6 +176,8 @@ void App::defineOptions(Poco::Util::OptionSet& options)
     options.addOption(Poco::Util::Option("config", "c", "path to config file")
                           .argument("${file}")
                           .callback(Poco::Util::OptionCallback<App>(this, &App::HandleConfigFile)));
+    options.addOption(Poco::Util::Option("test", "t", "run pipe test")
+                          .callback(Poco::Util::OptionCallback<App>(this, &App::HandleTest)));
 }
 
 /***********************************************************************************************************************
@@ -236,4 +249,16 @@ void App::HandleConfigFile(const std::string& name, const std::string& value)
     (void)name;
 
     mConfigFile = value;
+}
+
+void App::HandleTest(const std::string& name, const std::string& value)
+{
+    (void)name;
+    (void)value;
+
+    // mVChanManager->Test();
+    // RunPipeTest();
+    mTestMode = true;
+
+    // stopOptionsProcessing();
 }

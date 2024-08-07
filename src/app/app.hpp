@@ -45,6 +45,7 @@ private:
     void HandleJournal(const std::string& name, const std::string& value);
     void HandleLogLevel(const std::string& name, const std::string& value);
     void HandleConfigFile(const std::string& name, const std::string& value);
+    void HandleTest(const std::string& name, const std::string& value);
 
     aos::common::logger::Logger mLogger;
     bool                        mStopProcessing = false;
@@ -69,6 +70,7 @@ private:
     CMClient                    mCMClient;
     std::optional<VChanManager> mVChanManager;
     CommunicationManager        mCommunicationManager;
+    bool                        mTestMode = false;
 };
 
 #endif

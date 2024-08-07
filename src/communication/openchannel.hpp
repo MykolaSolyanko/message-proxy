@@ -21,7 +21,7 @@ public:
      * @param channel Communication channel.
      * @return aos::Error.
      */
-    OpenChannel(CommChannelItf& channel, int port);
+    OpenChannel(CommChannelItf* channel, int port);
 
     /**
      * Connect to channel.

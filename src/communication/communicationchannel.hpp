@@ -27,7 +27,7 @@ public:
      * @param port Port
      * @param commChan Communication channel
      */
-    CommunicationChannel(int port, CommChannelItf& commChan);
+    CommunicationChannel(int port, CommChannelItf* commChan);
 
     /**
      * Destructor.

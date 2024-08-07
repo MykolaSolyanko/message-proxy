@@ -6,12 +6,17 @@
  */
 
 #include "vchanmanager.hpp"
+#ifdef VCHAN
 #include "vchan.hpp"
+#else
+#include "socket.hpp"
+#endif
 
 /***********************************************************************************************************************
  * Public
  **********************************************************************************************************************/
 
+#ifdef VCHAN
 struct VChanImpl {
     VChanImpl(const Config& cfg)
         : mVChanReader(cfg.mVChan.mXSRXPath, cfg.mVChan.mDomain)
@@ -22,6 +27,16 @@ struct VChanImpl {
     VChan mVChanReader;
     VChan mVChanWriter;
 };
+#else
+struct VChanImpl {
+    VChanImpl([[maybe_unused]] const Config& cfg)
+        : mSocket(30001)
+    {
+    }
+
+    Socket mSocket;
+};
+#endif
 
 VChanManager::VChanManager(const Config& cfg)
     : mImpl(new VChanImpl(cfg))
@@ -35,30 +50,30 @@ VChanManager::~VChanManager()
 
 aos::Error VChanManager::Connect()
 {
-    aos::Error error = mImpl->mVChanReader.Connect();
-    if (error) {
-        return error;
-    }
+    // if (auto error = mImpl->mVChanReader.Connect(); !error.IsNone()) {
+    //     return error;
+    // }
 
-    return mImpl->mVChanWriter.Connect();
+    // return mImpl->mVChanWriter.Connect();
+
+    // if (auto error = mImpl->mSocket.Connect(); !error.IsNone()) {
+    //     return error;
+    // }
+
+    return mImpl->mSocket.Connect();
 }
 
 aos::Error VChanManager::Read(std::vector<uint8_t>& message)
 {
-    return mImpl->mVChanReader.Read(message);
+    return mImpl->mSocket.Read(message);
 }
 
 aos::Error VChanManager::Write(std::vector<uint8_t> message)
 {
-    return mImpl->mVChanWriter.Write(std::move(message));
+    return mImpl->mSocket.Write(std::move(message));
 }
 
 aos::Error VChanManager::Close()
 {
-    aos::Error error = mImpl->mVChanReader.Close();
-    if (error) {
-        return error;
-    }
-
-    return mImpl->mVChanWriter.Close();
+    return mImpl->mSocket.Close();
 }

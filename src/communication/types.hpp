@@ -32,13 +32,9 @@ public:
         return headerVector;
     }
 
-    std::vector<uint8_t> PrepareProtobufHeader(uint32_t dataSize, const std::string& methodName = "")
+    std::vector<uint8_t> PrepareProtobufHeader(uint32_t dataSize)
     {
         AosProtobufHeader header {};
-
-        if (!methodName.empty()) {
-            std::strncpy(header.mMethodName, methodName.c_str(), sizeof(header.mMethodName));
-        }
 
         header.mDataSize = dataSize;
 

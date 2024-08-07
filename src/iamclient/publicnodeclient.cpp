@@ -25,7 +25,14 @@ aos::Error PublicNodeClient::Init(const IAMConfig& cfg, CertProviderItf& certPro
         return err;
     }
 
-    mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, cfg.mIAMPublicServerURL);
+    std::string url;
+    if (provisioningMode) {
+        url = cfg.mIAMPublicServerURL;
+    } else {
+        url = cfg.mIAMProtectedServerURL;
+    }
+
+    mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, url);
 
     mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
 
@@ -163,6 +170,8 @@ void PublicNodeClient::HandleIncomingMessages()
     while (mStream->Read(&incomingMsg)) {
         std::vector<uint8_t> message(incomingMsg.ByteSizeLong());
 
+        LOG_DBG() << "Received message: msg=" << incomingMsg.DebugString().c_str();
+
         if (!incomingMsg.SerializeToArray(message.data(), message.size())) {
             LOG_ERR() << "Failed to serialize message";
 
@@ -207,7 +216,7 @@ void PublicNodeClient::ProcessOutgoingIAMMessages()
             continue;
         }
 
-        LOG_DBG() << "Sending message to IAM";
+        LOG_DBG() << "Sending message to IAM: msg=" << outgoingMsg.DebugString().c_str();
 
         if (!mStream->Write(outgoingMsg)) {
             LOG_ERR() << "Failed to send message";

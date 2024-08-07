@@ -43,6 +43,8 @@ public:
     void Close();
 
 private:
+    static constexpr auto cConnectionTimeout = std::chrono::seconds(5);
+
     void Run();
     void ReadHandler();
     void WriteHandler();
@@ -51,6 +53,9 @@ private:
     bool                                                            mShutdown {};
     std::thread                                                     mConnectThread;
     std::unique_ptr<CommChannelItf>                                 mIAMCommChannel;
+
+    std::mutex              mMutex;
+    std::condition_variable mCondVar;
 };
 
 #endif /* IAMCONNECTION_HPP_ */

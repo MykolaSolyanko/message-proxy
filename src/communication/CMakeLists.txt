@@ -19,18 +19,36 @@ option(WITH_VCHAN "build with vchan" ON)
 
 add_definitions(-DLOG_MODULE="communication")
 
+if(WITH_VCHAN)
+    add_definitions(-DVCHAN)
+endif()
+
 # ######################################################################################################################
 # Sources
 # ######################################################################################################################
 
-set(SOURCES communicationchannel.cpp communicationmanager.cpp openchannel.cpp securechannel.cpp iamconnection.cpp
-            cmconnection.cpp
+set(SOURCES
+    communicationchannel.cpp
+    communicationmanager.cpp
+    openchannel.cpp
+    securechannel.cpp
+    iamconnection.cpp
+    cmconnection.cpp
+    vchanmanager.cpp
+    pipe_test.cpp
 )
 
+# if(WITH_VCHAN)
+#     list(APPEND SOURCES vchan.cpp vchanmanager.cpp)
+# else()
+#     list(APPEND SOURCES vchanmanagerstub.cpp)
+# endif()
+
 if(WITH_VCHAN)
-    list(APPEND SOURCES vchan.cpp vchanmanager.cpp)
+    list(APPEND SOURCES vchan.cpp)
 else()
-    list(APPEND SOURCES vchanmanagerstub.cpp)
+    # list(APPEND SOURCES pipe.cpp)
+    list(APPEND SOURCES socket.cpp)
 endif()
 
 # ######################################################################################################################

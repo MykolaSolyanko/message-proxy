@@ -16,6 +16,7 @@ aos::Error IAMConnection::Init(int port, CertProviderItf* certProvider, Communic
     mChannel = &channel;
 
     try {
+        LOG_DBG() << "Create IAM channel: port=" << port;
 
         mIAMCommChannel = comManager.CreateChannel(port, certProvider);
     } catch (std::exception& e) {
@@ -47,6 +48,9 @@ void IAMConnection::Run()
         if (auto err = mIAMCommChannel->Connect(); !err.IsNone()) {
             LOG_ERR() << "Failed to connect to IAM error=" << err;
 
+            std::unique_lock<std::mutex> lock(mMutex);
+            mCondVar.wait_for(lock, cConnectionTimeout, [this]() { return mShutdown; });
+
             continue;
         }
 
@@ -74,6 +78,8 @@ void IAMConnection::ReadHandler()
             return;
         }
 
+        LOG_DBG() << "Received message from IAM: size=" << message.size();
+
         auto protobufHeader = ParseProtobufHeader(message);
         message.clear();
         message.resize(protobufHeader.mDataSize);
@@ -84,11 +90,15 @@ void IAMConnection::ReadHandler()
             return;
         }
 
+        LOG_DBG() << "Received message from IAM: size=" << message.size();
+
         if (auto err = mChannel->Send(message); !err.IsNone()) {
             LOG_ERR() << "Failed to send message to IAM error=" << err;
 
             return;
         }
+
+        LOG_DBG() << "Send message to IAM: size=" << message.size();
     }
 
     LOG_DBG() << "Read handler IAM connection finished";

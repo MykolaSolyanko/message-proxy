@@ -144,8 +144,8 @@ static servicemanager::v4::SMOutgoingMessages CreateInstantMonitoring()
     servicemanager::v4::MonitoringData monitoringData;
     monitoringData.set_ram(1);
     monitoringData.set_cpu(1);
-    monitoringData.set_in_traffic(1);
-    monitoringData.set_out_traffic(1);
+    monitoringData.set_download(1);
+    monitoringData.set_upload(1);
 
     google::protobuf::Timestamp timestamp;
     timestamp.set_seconds(1);
@@ -182,8 +182,8 @@ static servicemanager::v4::SMOutgoingMessages CreateAverageMonitoring()
     servicemanager::v4::MonitoringData monitoringData;
     monitoringData.set_ram(1);
     monitoringData.set_cpu(1);
-    monitoringData.set_in_traffic(1);
-    monitoringData.set_out_traffic(1);
+    monitoringData.set_download(1);
+    monitoringData.set_upload(1);
 
     google::protobuf::Timestamp timestamp;
     timestamp.set_seconds(1);
@@ -422,8 +422,8 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     auto instantMonitoringMsg = mSMService->GetOutgoingMsg().instant_monitoring();
     EXPECT_EQ(instantMonitoringMsg.node_monitoring().ram(), 1);
     EXPECT_EQ(instantMonitoringMsg.node_monitoring().cpu(), 1);
-    EXPECT_EQ(instantMonitoringMsg.node_monitoring().in_traffic(), 1);
-    EXPECT_EQ(instantMonitoringMsg.node_monitoring().out_traffic(), 1);
+    EXPECT_EQ(instantMonitoringMsg.node_monitoring().download(), 1);
+    EXPECT_EQ(instantMonitoringMsg.node_monitoring().upload(), 1);
     EXPECT_EQ(instantMonitoringMsg.node_monitoring().disk_size(), 1);
     EXPECT_EQ(instantMonitoringMsg.node_monitoring().disk(0).name(), "name");
     EXPECT_EQ(instantMonitoringMsg.node_monitoring().disk(0).used_size(), 1);
@@ -436,8 +436,8 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     EXPECT_EQ(instanceMonitoringMsg.instance().instance(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().ram(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().cpu(), 1);
-    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().in_traffic(), 1);
-    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().out_traffic(), 1);
+    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().download(), 1);
+    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().upload(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk_size(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk(0).name(), "name");
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk(0).used_size(), 1);
@@ -455,8 +455,8 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     auto averageMonitoringMsg = mSMService->GetOutgoingMsg().average_monitoring();
     EXPECT_EQ(averageMonitoringMsg.node_monitoring().ram(), 1);
     EXPECT_EQ(averageMonitoringMsg.node_monitoring().cpu(), 1);
-    EXPECT_EQ(averageMonitoringMsg.node_monitoring().in_traffic(), 1);
-    EXPECT_EQ(averageMonitoringMsg.node_monitoring().out_traffic(), 1);
+    EXPECT_EQ(averageMonitoringMsg.node_monitoring().download(), 1);
+    EXPECT_EQ(averageMonitoringMsg.node_monitoring().upload(), 1);
     EXPECT_EQ(averageMonitoringMsg.node_monitoring().disk_size(), 1);
     EXPECT_EQ(averageMonitoringMsg.node_monitoring().disk(0).name(), "name");
     EXPECT_EQ(averageMonitoringMsg.node_monitoring().disk(0).used_size(), 1);
@@ -469,8 +469,8 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     EXPECT_EQ(instanceMonitoringMsg.instance().instance(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().ram(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().cpu(), 1);
-    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().in_traffic(), 1);
-    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().out_traffic(), 1);
+    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().download(), 1);
+    EXPECT_EQ(instanceMonitoringMsg.monitoring_data().upload(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk_size(), 1);
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk(0).name(), "name");
     EXPECT_EQ(instanceMonitoringMsg.monitoring_data().disk(0).used_size(), 1);
