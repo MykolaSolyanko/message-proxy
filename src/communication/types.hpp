@@ -37,7 +37,9 @@ public:
         AosProtobufHeader header {};
 
         if (!methodName.empty()) {
-            std::strncpy(header.mMethodName, methodName.c_str(), sizeof(header.mMethodName));
+            auto len = std::min(methodName.length(), sizeof(header.mMethodName) - 1);
+            std::copy_n(methodName.c_str(), len, header.mMethodName);
+            header.mMethodName[len] = '\0';
         }
 
         header.mDataSize = dataSize;

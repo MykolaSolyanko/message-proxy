@@ -59,6 +59,8 @@ public:
     void Close();
 
 private:
+    static constexpr auto cConnectionTimeout = std::chrono::seconds(5);
+
     class Task : public Poco::Task {
     public:
         using Callback = std::function<void()>;
@@ -115,16 +117,23 @@ private:
     aos::Error SendMessage(std::vector<uint8_t> message, std::unique_ptr<CommChannelItf>& channel);
     aos::RetWithError<std::vector<uint8_t>> ReadMessage(std::unique_ptr<CommChannelItf>& channel);
 
+    aos::Error                              SendMessage(std::vector<uint8_t> message, CommChannelItf* channel);
+    aos::RetWithError<std::vector<uint8_t>> ReadMessage(CommChannelItf* channel);
+
     std::unique_ptr<CommChannelItf>                                 mCMCommOpenChannel;
     std::unique_ptr<CommChannelItf>                                 mCMCommSecureChannel;
     aos::common::utils::Channel<std::vector<uint8_t>>               mSecureMsgChannel;
     aos::common::utils::Channel<std::vector<uint8_t>>               mOpenMsgChannel;
     aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mChannel {};
 
-    Poco::TaskManager            mTaskManager;
+    Poco::TaskManager mTaskManager;
+
     std::atomic<bool>            mShutdown {};
     std::optional<Downloader>    mDownloader;
     std::optional<ImageUnpacker> mImageUnpacker;
+
+    std::mutex              mMutex;
+    std::condition_variable mCondVar;
 };
 
 #endif /* CMCONNECTION_HPP_ */

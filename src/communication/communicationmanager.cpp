@@ -10,6 +10,7 @@
  **********************************************************************************************************************/
 
 constexpr std::chrono::milliseconds cConnectionTimeout = std::chrono::seconds(10);
+constexpr std::chrono::seconds      cReconnectTimeout  = std::chrono::seconds(5);
 
 /***********************************************************************************************************************
  * Static
@@ -57,12 +58,12 @@ aos::Error CommunicationManager::Init(const Config& cfg, TransportItf& transport
 
 std::unique_ptr<CommChannelItf> CommunicationManager::CreateChannel(int port, CertProviderItf* certProvider)
 {
-    std::unique_ptr<CommunicationChannel> chan = std::make_unique<CommunicationChannel>(port, *this);
+    std::unique_ptr<CommunicationChannel> chan = std::make_unique<CommunicationChannel>(port, this);
 
     if (certProvider == nullptr) {
         LOG_DBG() << "Create open channel";
 
-        auto openchannel = std::make_unique<OpenChannel>(*chan, port);
+        auto openchannel = std::make_unique<OpenChannel>(chan.get(), port);
 
         mChannels[port] = std::move(chan);
 
@@ -82,6 +83,8 @@ std::unique_ptr<CommChannelItf> CommunicationManager::CreateChannel(int port, Ce
 aos::Error CommunicationManager::Connect()
 {
     std::lock_guard<std::mutex> lock(mMutex);
+
+    LOG_DBG() << "Connect communication manager";
 
     if (mIsConnected) {
         return aos::ErrorEnum::eNone;
@@ -154,7 +157,12 @@ void CommunicationManager::Run()
 
     while (!mShutdown) {
         if (auto err = Connect(); !err.IsNone()) {
-            LOG_ERR() << "Failed to connect error=" << err;
+            LOG_ERR() << "Failed to connect communication manager error=" << err;
+
+            {
+                std::unique_lock<std::mutex> lock(mMutex);
+                mCondVar.wait_for(lock, cReconnectTimeout, [this]() { return mIsConnected || mShutdown; });
+            }
 
             continue;
         }

@@ -4,8 +4,8 @@
  * Public
  **********************************************************************************************************************/
 
-OpenChannel::OpenChannel(CommChannelItf& channel, int port)
-    : mChannel(&channel)
+OpenChannel::OpenChannel(CommChannelItf* channel, int port)
+    : mChannel(channel)
     , mPort(port)
 {
 }

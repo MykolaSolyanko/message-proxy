@@ -6,12 +6,17 @@
  */
 
 #include "vchanmanager.hpp"
+#ifdef VCHAN
 #include "vchan.hpp"
+#else
+#include "pipe.hpp"
+#endif
 
 /***********************************************************************************************************************
  * Public
  **********************************************************************************************************************/
 
+#ifdef VCHAN
 struct VChanImpl {
     VChanImpl(const Config& cfg)
         : mVChanReader(cfg.mVChan.mXSRXPath, cfg.mVChan.mDomain)
@@ -22,6 +27,18 @@ struct VChanImpl {
     VChan mVChanReader;
     VChan mVChanWriter;
 };
+#else
+struct VChanImpl {
+    VChanImpl(const Config& cfg)
+        : mVChanReader(cfg.mVChan.mXSRXPath)
+        , mVChanWriter(cfg.mVChan.mXSTXPath)
+    {
+    }
+
+    Pipe mVChanReader;
+    Pipe mVChanWriter;
+};
+#endif
 
 VChanManager::VChanManager(const Config& cfg)
     : mImpl(new VChanImpl(cfg))
@@ -35,8 +52,7 @@ VChanManager::~VChanManager()
 
 aos::Error VChanManager::Connect()
 {
-    aos::Error error = mImpl->mVChanReader.Connect();
-    if (error) {
+    if (auto error = mImpl->mVChanReader.Connect(); !error.IsNone()) {
         return error;
     }
 
@@ -55,8 +71,7 @@ aos::Error VChanManager::Write(std::vector<uint8_t> message)
 
 aos::Error VChanManager::Close()
 {
-    aos::Error error = mImpl->mVChanReader.Close();
-    if (error) {
+    if (auto error = mImpl->mVChanReader.Close(); !error.IsNone()) {
         return error;
     }
 

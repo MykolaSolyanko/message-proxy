@@ -47,6 +47,9 @@ void IAMConnection::Run()
         if (auto err = mIAMCommChannel->Connect(); !err.IsNone()) {
             LOG_ERR() << "Failed to connect to IAM error=" << err;
 
+            std::unique_lock<std::mutex> lock(mMutex);
+            mCondVar.wait_for(lock, cConnectionTimeout, [this]() { return mShutdown; });
+
             continue;
         }
 

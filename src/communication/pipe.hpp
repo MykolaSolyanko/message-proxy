@@ -5,18 +5,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef VCHAN_HPP_
-#define VCHAN_HPP_
+#ifndef PIPE_HPP_
+#define PIPE_HPP_
 
 #include "types.hpp"
-#include <libxenvchan.h>
 
 /**
  * @brief Virtual Channel class
  */
-class VChan : public TransportItf {
+class Pipe : public TransportItf {
 public:
-    VChan(const std::string& path, int domain);
+    Pipe(const std::string& path);
 
     /**
      * @brief Connect to the virtual channel
@@ -47,9 +46,8 @@ public:
     aos::Error Close() override;
 
 private:
-    std::string         mPath;
-    int                 mDomain;
-    struct libxenvchan* mVChan {};
+    std::string mPath;
+    int         mFd;
 };
 
-#endif // VCHAN_HPP_
+#endif // PIPE_HPP_

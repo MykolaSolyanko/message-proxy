@@ -3,8 +3,8 @@
 
 std::mutex CommunicationChannel::mCommChannelMutex;
 
-CommunicationChannel::CommunicationChannel(int port, CommChannelItf& commChan)
-    : mCommChannel(&commChan)
+CommunicationChannel::CommunicationChannel(int port, CommChannelItf* commChan)
+    : mCommChannel(commChan)
     , mPort(port)
 {
 }
@@ -12,6 +12,8 @@ CommunicationChannel::CommunicationChannel(int port, CommChannelItf& commChan)
 aos::Error CommunicationChannel::Connect()
 {
     std::unique_lock<std::mutex> lock(mCommChannelMutex);
+
+    LOG_DBG() << "Connect in communication channel";
 
     return mCommChannel->Connect();
 }
