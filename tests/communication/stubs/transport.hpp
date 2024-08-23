@@ -19,6 +19,7 @@
 
 #include "communication/communicationchannel.hpp"
 #include "communication/types.hpp"
+#include "communication/utils.hpp"
 
 class Pipe : public TransportItf {
 public:
@@ -350,7 +351,7 @@ private:
     }
 };
 
-class CommManager : public CommChannelItf, public AosProtocol {
+class CommManager : public CommChannelItf {
 public:
     CommManager(Pipe& transport)
         : mTransport(transport)
@@ -371,7 +372,7 @@ public:
             return it->second;
         }
 
-        auto commChannel = std::make_shared<CommunicationChannel>(port, *this);
+        auto commChannel = std::make_shared<CommunicationChannel>(port, this);
 
         mChannels[port] = commChannel;
 
@@ -441,4 +442,91 @@ private:
     std::thread                                          mThread;
     std::atomic<bool>                                    mShutdown {false};
     std::map<int, std::shared_ptr<CommunicationChannel>> mChannels;
+};
+
+// class HandlerItf {
+// public:
+//     virtual ~HandlerItf() = default;
+
+//     virtual void OnConnected() = 0;
+
+//     virtual aos::Error SendMessages(std::vector<uint8_t> messages) = 0;
+
+//     virtual aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() = 0;
+// };
+
+class Handler : public HandlerItf {
+public:
+    void OnConnected() override { }
+
+    void OnDisconnected() override
+    {
+        std::lock_guard<std::mutex> lock {mMutex};
+
+        mShutdown = true;
+        mCondVar.notify_all();
+    }
+
+    aos::Error SendMessages(std::vector<uint8_t> messages) override
+    {
+        std::lock_guard<std::mutex> lock {mMutex};
+
+        if (mShutdown) {
+            return aos::ErrorEnum::eRuntime;
+        }
+
+        mOutgoingMessages = std::move(messages);
+        mCondVar.notify_all();
+
+        return aos::ErrorEnum::eNone;
+    }
+
+    aos::RetWithError<std::vector<uint8_t>> GetOutgoingMessages()
+    {
+        std::unique_lock<std::mutex> lock {mMutex};
+
+        mCondVar.wait(lock, [this] { return !mOutgoingMessages.empty() || mShutdown; });
+
+        if (mShutdown) {
+            return {{}, aos::ErrorEnum::eRuntime};
+        }
+
+        return {std::move(mOutgoingMessages), aos::ErrorEnum::eNone};
+    }
+
+    aos::Error SetIncomingMessages(std::vector<uint8_t> messages)
+    {
+        std::lock_guard<std::mutex> lock {mMutex};
+
+        if (mShutdown) {
+            return aos::ErrorEnum::eRuntime;
+        }
+
+        mIncomingMessages = std::move(messages);
+        mCondVar.notify_all();
+
+        return aos::ErrorEnum::eNone;
+    }
+
+    aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() override
+    {
+        std::unique_lock<std::mutex> lock {mMutex};
+
+        mCondVar.wait(lock, [this] { return !mIncomingMessages.empty() || mShutdown; });
+
+        if (mShutdown) {
+            return {{}, aos::ErrorEnum::eRuntime};
+        }
+
+        return {std::move(mIncomingMessages), aos::ErrorEnum::eNone};
+    }
+
+private:
+    std::mutex              mMutex;
+    std::condition_variable mCondVar;
+
+    std::vector<uint8_t> mOutgoingMessages;
+    std::vector<uint8_t> mIncomingMessages;
+
+    bool mShutdown {};
 };

@@ -13,14 +13,21 @@
 #include <Poco/Util/ServerApplication.h>
 
 #include <logger/logger.hpp>
-#include <utils/bidirectionalchannel.hpp>
 
 #include <aos/common/crypto/mbedtls/cryptoprovider.hpp>
 #include <aos/iam/certmodules/pkcs11/pkcs11.hpp>
 
 #include "cmclient/cmclient.hpp"
+#include "communication/cmconnection.hpp"
 #include "communication/communicationmanager.hpp"
-#include "communication/vchanmanager.hpp"
+#include "communication/iamconnection.hpp"
+// #include "communication/vchanmanager.hpp"
+#ifdef VCHAN
+#include "communication/vchan.hpp"
+#else
+#include "communication/socket.hpp"
+#endif
+
 #include "config/config.hpp"
 #include "iamclient/iamclient.hpp"
 
@@ -52,25 +59,27 @@ private:
     bool                        mProvisioning   = false;
     std::string                 mConfigFile;
 
-    aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>         mIAMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>> mIAMChannel;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>> mIAMReverseChannel;
-
-    aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>         mCMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>> mCMChannel;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>> mCMReverseChannel;
-
     aos::crypto::MbedTLSCryptoProvider mCryptoProvider;
     aos::cryptoutils::CertLoader       mCertLoader;
     aos::pkcs11::PKCS11Manager         mPKCS11Manager;
 
     Config mConfig;
 
-    IAMClient                   mIAMClient;
-    CMClient                    mCMClient;
-    std::optional<VChanManager> mVChanManager;
-    CommunicationManager        mCommunicationManager;
-    bool                        mTestMode = false;
+    IAMClient mIAMClient;
+    CMClient  mCMClient;
+
+// std::optional<VChanManager> mVChanManager;
+#ifdef VCHAN
+    VChan mTransport;
+#else
+    Socket mTransport;
+#endif
+    CommunicationManager mCommunicationManager;
+    IAMConnection        mIAMPublicConnection;
+    IAMConnection        mIAMProtectedConnection;
+
+    CMConnection mCMConnection;
+    bool         mTestMode = false;
 };
 
 #endif

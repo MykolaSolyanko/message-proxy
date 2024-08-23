@@ -8,46 +8,22 @@
 set(TARGET communication)
 
 # ######################################################################################################################
-# Options
-# ######################################################################################################################
-
-option(WITH_VCHAN "build with vchan" ON)
-
-# ######################################################################################################################
 # Compiler flags
 # ######################################################################################################################
 
 add_definitions(-DLOG_MODULE="communication")
 
-if(WITH_VCHAN)
-    add_definitions(-DVCHAN)
-endif()
-
 # ######################################################################################################################
 # Sources
 # ######################################################################################################################
 
-set(SOURCES
-    communicationchannel.cpp
-    communicationmanager.cpp
-    openchannel.cpp
-    securechannel.cpp
-    iamconnection.cpp
-    cmconnection.cpp
-    vchanmanager.cpp
-    pipe_test.cpp
+set(SOURCES communicationchannel.cpp communicationmanager.cpp openchannel.cpp securechannel.cpp iamconnection.cpp
+            cmconnection.cpp
 )
-
-# if(WITH_VCHAN)
-#     list(APPEND SOURCES vchan.cpp vchanmanager.cpp)
-# else()
-#     list(APPEND SOURCES vchanmanagerstub.cpp)
-# endif()
 
 if(WITH_VCHAN)
     list(APPEND SOURCES vchan.cpp)
 else()
-    # list(APPEND SOURCES pipe.cpp)
     list(APPEND SOURCES socket.cpp)
 endif()
 
@@ -75,9 +51,14 @@ target_link_libraries(
            aoscoreapi-gen-objects
            aosprotocol
            Poco::Foundation
+           Poco::Net
            OpenSSL::SSL
            OpenSSL::Crypto
            downloader
            imageunpacker
            filechunker
 )
+
+if(WITH_VCHAN)
+    target_link_libraries(${TARGET} PUBLIC Xenvchan::Xenvchan)
+endif()

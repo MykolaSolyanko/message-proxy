@@ -12,6 +12,7 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/trace.h>
 
 #include <utils/cryptohelper.hpp>
 #include <utils/pkcs11helper.hpp>
@@ -24,15 +25,20 @@
  **********************************************************************************************************************/
 
 SecureChannel::SecureChannel(const Config& cfg, CommChannelItf& channel, CertProviderItf& certProvider,
-    aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port)
+    aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port,
+    const std::string& certStorage)
     : mChannel(&channel)
     , mCertProvider(&certProvider)
     , mCertLoader(&certLoader)
     , mCryptoProvider(&cryptoProvider)
     , mCfg(&cfg)
     , mPort(port)
+    , mCertStorage(certStorage)
 {
+    LOG_DBG() << "Create SecureChannel port=" << mPort;
+
     InitOpenssl();
+
     const SSL_METHOD* method = TLS_server_method();
     mCtx                     = CreateSSLContext(method);
 
@@ -50,6 +56,8 @@ SecureChannel::SecureChannel(const Config& cfg, CommChannelItf& channel, CertPro
 
 SecureChannel::~SecureChannel()
 {
+    LOG_DBG() << "Destroy SecureChannel port=" << mPort;
+
     SSL_free(mSsl);
     SSL_CTX_free(mCtx);
     CleanupOpenssl();
@@ -57,6 +65,8 @@ SecureChannel::~SecureChannel()
 
 aos::Error SecureChannel::Connect()
 {
+    LOG_DBG() << "Connect to the secure channel port=" << mPort;
+
     if (auto err = mChannel->Connect(); !err.IsNone()) {
         return err;
     }
@@ -90,6 +100,8 @@ aos::Error SecureChannel::Read(std::vector<uint8_t>& message)
         return aos::Error(aos::ErrorEnum::eRuntime, "message buffer is empty");
     }
 
+    LOG_DBG() << "Requesting secure read port=" << mPort << " size=" << message.size();
+
     int bytes_read = SSL_read(mSsl, message.data(), message.size());
     if (bytes_read <= 0) {
         return aos::Error(aos::ErrorEnum::eRuntime, GetOpensslErrorString().c_str());
@@ -100,6 +112,8 @@ aos::Error SecureChannel::Read(std::vector<uint8_t>& message)
 
 aos::Error SecureChannel::Write(std::vector<uint8_t> message)
 {
+    LOG_DBG() << "Write secure data port=" << mPort << " size=" << message.size();
+
     if (int bytes_written = SSL_write(mSsl, message.data(), message.size()); bytes_written <= 0) {
         return aos::Error(aos::ErrorEnum::eRuntime, GetOpensslErrorString().c_str());
     }
@@ -168,7 +182,7 @@ aos::Error SecureChannel::ConfigureSSLContext(SSL_CTX* ctx, ENGINE* eng)
 
     aos::iam::certhandler::CertInfo certInfo;
 
-    auto err = mCertProvider->GetCertificate(mCfg->mVChan.mCertStorage, certInfo);
+    auto err = mCertProvider->GetCertificate(mCertStorage, certInfo);
     if (!err.IsNone()) {
         return err;
     }
@@ -235,7 +249,7 @@ aos::Error SecureChannel::ConfigureSSLContext(SSL_CTX* ctx, ENGINE* eng)
 
 int SecureChannel::CustomBIOWrite(BIO* bio, const char* buf, int len)
 {
-    LOG_DBG() << "SecureChannel::CustomBIOWrite: request " << len << " bytes";
+    LOG_DBG() << "Write to the secure channel, expected: size=" << len;
 
     SecureChannel*       channel = static_cast<SecureChannel*>(BIO_get_data(bio));
     std::vector<uint8_t> data(buf, buf + len);
@@ -246,7 +260,7 @@ int SecureChannel::CustomBIOWrite(BIO* bio, const char* buf, int len)
 
 int SecureChannel::CustomBIORead(BIO* bio, char* buf, int len)
 {
-    LOG_DBG() << "SecureChannel::CustomBIORead: request " << len << " bytes";
+    LOG_DBG() << "Read from the secure channel, expected: size=" << len;
 
     SecureChannel*       channel = static_cast<SecureChannel*>(BIO_get_data(bio));
     std::vector<uint8_t> data(len);

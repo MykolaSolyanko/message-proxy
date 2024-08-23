@@ -1,4 +1,5 @@
 #include "openchannel.hpp"
+#include "logger/logmodule.hpp"
 
 /***********************************************************************************************************************
  * Public
@@ -12,6 +13,8 @@ OpenChannel::OpenChannel(CommChannelItf* channel, int port)
 
 aos::Error OpenChannel::Connect()
 {
+    LOG_DBG() << "Connect to the open channel port=" << mPort;
+
     return mChannel->Connect();
 }
 
@@ -27,5 +30,7 @@ aos::Error OpenChannel::Write(std::vector<uint8_t> message)
 
 aos::Error OpenChannel::Close()
 {
+    LOG_DBG() << "Close channel port=" << mPort;
+
     return mChannel->Close();
 }

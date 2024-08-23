@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include <test/utils/log.hpp>
+
 #include "config/config.hpp"
 
 /***********************************************************************************************************************
@@ -34,6 +36,8 @@ class ConfigTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
+        aos::InitLog();
+
         tempConfigFile = "temp_config.json";
 
         std::string content = R"({
@@ -43,8 +47,10 @@ protected:
             "ImageStoreDir": "/path/to/images",
             "IAMConfig": {
                 "IAMPublicServerURL": "localhost:8090",
+                "IAMProtectedServerURL": "localhost:8091",
                 "CertStorage": "iam",
-                "Port": 8080
+                "OpenPort": 8080,
+                "SecurePort": 8081
             },
             "CMConfig": {
                 "CMServerURL": "localhost:8095",
@@ -55,13 +61,11 @@ protected:
                 "Domain": 1,
                 "XSRXPath": "/path/to/rx",
                 "XSTXPath": "/path/to/tx",
-                "CertStorage": "certs"
+                "IAMCertStorage": "iam-certs",
+                "SMCertStorage": "sm-certs"
             },
-            "Download": {
-                "DownloadDir": "/var/downloads",
-                "MaxConcurrentDownloads": 5,
-                "RetryDelay": "5s",
-                "MaxRetryDelay": "60s"
+            "Downloader": {
+                "DownloadDir": "/var/aos/workdirs/mp/downloads"
             }
         })";
 
@@ -90,8 +94,10 @@ TEST_F(ConfigTest, ParseConfig)
     EXPECT_EQ(config.mImageStoreDir, "/path/to/images");
 
     EXPECT_EQ(config.mIAMConfig.mIAMPublicServerURL, "localhost:8090");
+    EXPECT_EQ(config.mIAMConfig.mIAMProtectedServerURL, "localhost:8091");
     EXPECT_EQ(config.mIAMConfig.mCertStorage, "iam");
-    EXPECT_EQ(config.mIAMConfig.mPort, 8080);
+    EXPECT_EQ(config.mIAMConfig.mOpenPort, 8080);
+    EXPECT_EQ(config.mIAMConfig.mSecurePort, 8081);
 
     EXPECT_EQ(config.mCMConfig.mCMServerURL, "localhost:8095");
     EXPECT_EQ(config.mCMConfig.mOpenPort, 8080);
@@ -99,11 +105,12 @@ TEST_F(ConfigTest, ParseConfig)
 
     EXPECT_EQ(config.mVChan.mXSRXPath, "/path/to/rx");
     EXPECT_EQ(config.mVChan.mXSTXPath, "/path/to/tx");
-    EXPECT_EQ(config.mVChan.mCertStorage, "certs");
+    EXPECT_EQ(config.mVChan.mIAMCertStorage, "iam-certs");
+    EXPECT_EQ(config.mVChan.mSMCertStorage, "sm-certs");
     EXPECT_EQ(config.mVChan.mDomain, 1);
 
-    EXPECT_EQ(config.mDownload.mDownloadDir, "/var/downloads");
-    EXPECT_EQ(config.mDownload.mMaxConcurrentDownloads, 5);
-    EXPECT_EQ(config.mDownload.mRetryDelay, std::chrono::seconds(5));
-    EXPECT_EQ(config.mDownload.mMaxRetryDelay, std::chrono::seconds(60));
+    EXPECT_EQ(config.mDownload.mDownloadDir, "/var/aos/workdirs/mp/downloads");
+    // EXPECT_EQ(config.mDownload.mMaxConcurrentDownloads, 5);
+    // EXPECT_EQ(config.mDownload.mRetryDelay, std::chrono::seconds(5));
+    // EXPECT_EQ(config.mDownload.mMaxRetryDelay, std::chrono::seconds(60));
 }

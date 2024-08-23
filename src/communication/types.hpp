@@ -5,60 +5,9 @@
 #include <memory>
 #include <vector>
 
-#include <aosprotocol.h>
-
 #include <aos/common/tools/error.hpp>
-#include <openssl/sha.h>
 
 #include "iamclient/types.hpp"
-
-// 64kb
-static constexpr size_t cMaxMessageSize = 64 * 1024;
-
-class AosProtocol {
-public:
-    std::vector<uint8_t> PrepareHeader(uint32_t port, const std::vector<uint8_t>& data)
-    {
-        AosProtocolHeader header {};
-
-        header.mPort     = port;
-        header.mDataSize = static_cast<uint32_t>(data.size());
-
-        SHA256(data.data(), data.size(), header.mCheckSum);
-
-        std::vector<uint8_t> headerVector(cHeaderSize);
-        std::memcpy(headerVector.data(), &header, cHeaderSize);
-
-        return headerVector;
-    }
-
-    std::vector<uint8_t> PrepareProtobufHeader(uint32_t dataSize)
-    {
-        AosProtobufHeader header {};
-
-        header.mDataSize = dataSize;
-
-        std::vector<uint8_t> headerVector(cProtobufHeaderSize);
-        std::memcpy(headerVector.data(), &header, cProtobufHeaderSize);
-
-        return headerVector;
-    }
-
-    AosProtobufHeader ParseProtobufHeader(const std::vector<uint8_t>& header)
-    {
-        AosProtobufHeader headerStruct {};
-
-        std::memcpy(&headerStruct, header.data(), cProtobufHeaderSize);
-
-        return headerStruct;
-    }
-
-protected:
-    static constexpr size_t cProtobufHeaderSize = sizeof(AosProtobufHeader);
-
-private:
-    static constexpr size_t cHeaderSize = sizeof(AosProtocolHeader);
-};
 
 class CommChannelItf {
 public:
@@ -121,7 +70,50 @@ public:
 
 class CommunicationManagerItf : public CommChannelItf {
 public:
-    virtual std::unique_ptr<CommChannelItf> CreateChannel(int port, CertProviderItf* certProvider) = 0;
+    /**
+     * Create channel.
+     *
+     * @param port Port.
+     * @param certProvider Certificate provider.
+     * @param certStorage Certificate storage.
+     * @return std::unique_ptr<CommChannelItf>.
+     */
+    virtual std::unique_ptr<CommChannelItf> CreateChannel(
+        int port, CertProviderItf* certProvider = nullptr, const std::string& certStorage = "")
+        = 0;
+};
+
+class HandlerItf {
+public:
+    /**
+     * Destructor.
+     */
+    virtual ~HandlerItf() = default;
+
+    /**
+     * Notify about connection.
+     */
+    virtual void OnConnected() = 0;
+
+    /**
+     * Notify about disconnection.
+     */
+    virtual void OnDisconnected() = 0;
+
+    /**
+     * Send messages.
+     *
+     * @param messages Messages.
+     * @return aos::Error.
+     */
+    virtual aos::Error SendMessages(std::vector<uint8_t> messages) = 0;
+
+    /**
+     * Receive messages.
+     *
+     * @return aos::RetWithError<std::vector<uint8_t>>.
+     */
+    virtual aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() = 0;
 };
 
 #endif // COMMUNICATION_TYPES_HPP

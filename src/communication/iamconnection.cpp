@@ -6,19 +6,20 @@
  */
 
 #include "iamconnection.hpp"
+#include "communication/utils.hpp"
 #include "logger/logmodule.hpp"
 
-aos::Error IAMConnection::Init(int port, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel)
+aos::Error IAMConnection::Init(int port, HandlerItf& handler, CommunicationManagerItf& comManager,
+    CertProviderItf* certProvider, const std::string& certStorage)
 {
     LOG_DBG() << "Init IAM connection";
 
-    mChannel = &channel;
+    mHandler = &handler;
 
     try {
-        LOG_DBG() << "Create IAM channel: port=" << port;
+        LOG_DBG() << "Create IAM channel: port=" << port << " certStorage=" << certStorage.c_str();
 
-        mIAMCommChannel = comManager.CreateChannel(port, certProvider);
+        mIAMCommChannel = comManager.CreateChannel(port, certProvider, certStorage);
     } catch (std::exception& e) {
         return aos::Error(aos::ErrorEnum::eFailed, e.what());
     }
@@ -32,12 +33,15 @@ void IAMConnection::Close()
 {
     LOG_DBG() << "Close IAM connection";
 
+    mHandler->OnDisconnected();
     mIAMCommChannel->Close();
     mShutdown = true;
 
     if (mConnectThread.joinable()) {
         mConnectThread.join();
     }
+
+    LOG_DBG() << "Close IAM connection finished";
 }
 
 void IAMConnection::Run()
@@ -53,6 +57,8 @@ void IAMConnection::Run()
 
             continue;
         }
+
+        mHandler->OnConnected();
 
         auto readThread  = std::thread(&IAMConnection::ReadHandler, this);
         auto writeThread = std::thread(&IAMConnection::WriteHandler, this);
@@ -92,13 +98,13 @@ void IAMConnection::ReadHandler()
 
         LOG_DBG() << "Received message from IAM: size=" << message.size();
 
-        if (auto err = mChannel->Send(message); !err.IsNone()) {
+        if (auto err = mHandler->SendMessages(std::move(message)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message to IAM error=" << err;
 
             return;
         }
 
-        LOG_DBG() << "Send message to IAM: size=" << message.size();
+        LOG_DBG() << "Message sent to IAM";
     }
 
     LOG_DBG() << "Read handler IAM connection finished";
@@ -109,7 +115,7 @@ void IAMConnection::WriteHandler()
     LOG_DBG() << "Write handler IAM connection";
 
     while (!mShutdown) {
-        auto message = mChannel->Receive();
+        auto message = mHandler->ReceiveMessages();
         if (!message.mError.IsNone()) {
             LOG_ERR() << "Failed to receive message from IAM error=" << message.mError;
 
@@ -121,7 +127,7 @@ void IAMConnection::WriteHandler()
         auto header = PrepareProtobufHeader(message.mValue.size());
         header.insert(header.end(), message.mValue.begin(), message.mValue.end());
 
-        LOG_DBG() << "Send message to IAM: size=" << header.size();
+        LOG_DBG() << "Send message to IAM channel: size=" << header.size();
 
         if (auto err = mIAMCommChannel->Write(std::move(header)); !err.IsNone()) {
             LOG_ERR() << "Failed to write to IAM error=" << err;

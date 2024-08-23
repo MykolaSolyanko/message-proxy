@@ -16,14 +16,14 @@
 
 aos::Error CMClient::Init(const Config& config, CertProviderItf& certProvider,
     aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool insecureConnection)
+    bool insecureConnection)
 {
     LOG_INF() << "Initializing CM client";
 
     mCertProvider   = &certProvider;
     mCertLoader     = &certLoader;
     mCryptoProvider = &cryptoProvider;
-    mMsgHandler     = &channel;
+    mUrl            = config.mCMConfig.mCMServerURL;
 
     auto [credentials, err] = CreateCredentials(config.mCertStorage, insecureConnection);
     if (!err.IsNone()) {
@@ -32,28 +32,69 @@ aos::Error CMClient::Init(const Config& config, CertProviderItf& certProvider,
 
     mCredentials = credentials;
 
-    mCMThread = std::thread(&CMClient::RunCM, this, config.mCMConfig.mCMServerURL);
-
-    mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
-
     return aos::ErrorEnum::eNone;
 }
 
-CMClient::~CMClient()
+aos::Error CMClient::SendMessages(std::vector<uint8_t> messages)
+{
+    LOG_DBG() << "Sending messages";
+
+    return mOutgoingMsgChannel.Send(std::move(messages));
+}
+
+aos::RetWithError<std::vector<uint8_t>> CMClient::ReceiveMessages()
+{
+    LOG_DBG() << "Receiving messages";
+
+    return mIncomingMsgChannel.Receive();
+}
+
+void CMClient::OnConnected()
+{
+    std::lock_guard<std::mutex> lock {mMutex};
+
+    LOG_INF() << "Connected to CM";
+
+    if (!mNotifyConnected) {
+        mNotifyConnected = true;
+
+        mCMThread                  = std::thread(&CMClient::RunCM, this, mUrl);
+        mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
+    }
+}
+
+void CMClient::OnDisconnected()
+{
+    Close();
+}
+
+/***********************************************************************************************************************
+ * Private
+ **********************************************************************************************************************/
+
+void CMClient::Close()
 {
     LOG_INF() << "Shutting down CM client";
-
-    mShutdown = true;
 
     {
         std::lock_guard<std::mutex> lock(mMutex);
 
+        if (mShutdown || !mNotifyConnected) {
+            return;
+        }
+
+        mShutdown        = true;
+        mNotifyConnected = false;
+
         if (mCtx) {
             mCtx->TryCancel();
         }
-
-        mCV.notify_all();
     }
+
+    mCV.notify_all();
+
+    mOutgoingMsgChannel.Close();
+    mIncomingMsgChannel.Close();
 
     if (mCMThread.joinable()) {
         mCMThread.join();
@@ -63,10 +104,6 @@ CMClient::~CMClient()
         mHandlerOutgoingMsgsThread.join();
     }
 }
-
-/***********************************************************************************************************************
- * Private
- **********************************************************************************************************************/
 
 aos::RetWithError<std::shared_ptr<grpc::ChannelCredentials>> CMClient::CreateCredentials(
     const std::string& certStorage, bool insecureConnection)
@@ -84,7 +121,7 @@ SMServiceStubPtr CMClient::CreateSMStub(const std::string& url)
 {
     auto channel = grpc::CreateCustomChannel(url, mCredentials, grpc::ChannelArguments());
     if (!channel) {
-        throw std::runtime_error("Failed to create channel");
+        throw std::runtime_error("failed to create channel");
     }
 
     return SMService::NewStub(channel);
@@ -99,10 +136,9 @@ void CMClient::RegisterSM(const std::string& url)
     mSMStub = CreateSMStub(url);
 
     mCtx = std::make_unique<grpc::ClientContext>();
-    mCtx->set_deadline(std::chrono::system_clock::now() + cCMConnectTimeout);
 
     if (mStream = mSMStub->RegisterSM(mCtx.get()); !mStream) {
-        throw std::runtime_error("Failed to register service to SM");
+        throw std::runtime_error("failed to register service to SM");
     }
 
     mCMConnected = true;
@@ -118,6 +154,7 @@ void CMClient::RunCM(std::string url)
 
         try {
             RegisterSM(url);
+            SendCachedMessages();
             ProcessIncomingSMMessage();
 
         } catch (const std::exception& e) {
@@ -126,8 +163,8 @@ void CMClient::RunCM(std::string url)
 
         {
             std::unique_lock<std::mutex> lock(mMutex);
-            mCMConnected = false;
 
+            mCMConnected = false;
             mCV.wait_for(lock, cReconnectTimeout, [&] { return mShutdown.load(); });
         }
     }
@@ -152,7 +189,7 @@ void CMClient::ProcessIncomingSMMessage()
 
         LOG_DBG() << "Sending message to handler";
 
-        if (auto err = mMsgHandler->Send(std::move(data)); !err.IsNone()) {
+        if (auto err = mIncomingMsgChannel.Send(std::move(data)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message: error=" << err;
 
             return;
@@ -165,7 +202,7 @@ void CMClient::ProcessOutgoingSMMessages()
     LOG_DBG() << "Processing outgoing SM messages";
 
     while (!mShutdown) {
-        auto [msg, err] = mMsgHandler->Receive();
+        auto [msg, err] = mOutgoingMsgChannel.Receive();
         if (!err.IsNone()) {
             LOG_ERR() << "Failed to receive message: error=" << err;
 
@@ -193,9 +230,46 @@ void CMClient::ProcessOutgoingSMMessages()
         if (!mStream->Write(outgoingMsg)) {
             LOG_ERR() << "Failed to send message";
 
+            CacheMessage(outgoingMsg);
+
             continue;
         }
     }
 
     LOG_DBG() << "Outgoing SM messages thread stopped";
+}
+
+void CMClient::SendCachedMessages()
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+
+    while (!mMessageCache.empty()) {
+        const auto& message = mMessageCache.front();
+
+        if (!mStream->Write(message)) {
+            throw std::runtime_error("failed to send cached message");
+        }
+
+        mMessageCache.pop();
+
+        LOG_DBG() << "Successfully sent cached message";
+    }
+}
+
+void CMClient::CacheMessage(const servicemanager::v4::SMOutgoingMessages& message)
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+
+    switch (message.SMOutgoingMessage_case()) {
+    case servicemanager::v4::SMOutgoingMessages::kNodeConfigStatus:
+        LOG_DBG() << "Caching NodeConfigStatus message";
+        mMessageCache.push(message);
+
+        break;
+
+    default:
+        LOG_ERR() << "Skipping caching message";
+
+        break;
+    }
 }

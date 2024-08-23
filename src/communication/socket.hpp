@@ -5,25 +5,44 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef PIPE_HPP_
-#define PIPE_HPP_
+#ifndef SOCKET_HPP_
+#define SOCKET_HPP_
+
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#include <Poco/Net/ServerSocket.h>
+#include <Poco/Net/SocketNotification.h>
+#include <Poco/Net/SocketReactor.h>
+#include <Poco/Net/StreamSocket.h>
 
 #include "types.hpp"
 
 /**
- * @brief Virtual Channel class
+ * Socket class
  */
 class Socket : public TransportItf {
 public:
-    Socket(int port);
+    /**
+     * Initialize the socket
+     *
+     * @param port Port
+     * @return aos::Error
+     */
+    aos::Error Init(int port);
 
     /**
-     * @brief Connect to the virtual channel
+     * Connect to the socket
+     *
+     * @return aos::Error
      */
     aos::Error Connect() override;
 
     /**
-     * @brief Read message from the virtual channel
+     * Read message from the socket
      *
      * @param message Message
      * @return aos::Error
@@ -31,7 +50,7 @@ public:
     aos::Error Read(std::vector<uint8_t>& message) override;
 
     /**
-     * @brief Write message to the virtual channel
+     * Write message to the socket
      *
      * @param message Message
      * @return aos::Error
@@ -39,16 +58,26 @@ public:
     aos::Error Write(std::vector<uint8_t> message) override;
 
     /**
-     * @brief Close the virtual channel
+     * Close the socket
      *
      * @return aos::Error
      */
     aos::Error Close() override;
 
 private:
-    int mPort;
-    int mFd;
-    int mServerFd;
+    void OnAccept(Poco::Net::ReadableNotification* pNf);
+    void CleanupResources();
+    void ReactorThread();
+
+    int                      mPort {-1};
+    std::atomic<bool>        mShutdown {};
+    bool                     mConnectionAccepted {};
+    Poco::Net::ServerSocket  mServerSocket;
+    Poco::Net::StreamSocket  mClientSocket;
+    Poco::Net::SocketReactor mReactor;
+    std::thread              mReactorThread;
+    std::mutex               mMutex;
+    std::condition_variable  mCV;
 };
 
-#endif // PIPE_HPP_
+#endif // SOCKET_HPP_

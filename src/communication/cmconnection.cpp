@@ -14,6 +14,7 @@
 #include "logger/logmodule.hpp"
 
 #include "cmconnection.hpp"
+#include "communication/utils.hpp"
 
 /***********************************************************************************************************************
  * Public
@@ -24,16 +25,21 @@ CMConnection::CMConnection()
 {
 }
 
-aos::Error CMConnection::Init(const Config& cfg, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel)
+aos::Error CMConnection::Init(
+    const Config& cfg, HandlerItf& handler, CommunicationManagerItf& comManager, CertProviderItf* certProvider)
 {
     LOG_DBG() << "Init CMConnection";
 
+    mHandler = &handler;
+
     try {
-        mChannel           = &channel;
-        mCMCommOpenChannel = comManager.CreateChannel(cfg.mCMConfig.mOpenPort, nullptr);
+        mCMCommOpenChannel = comManager.CreateChannel(cfg.mCMConfig.mOpenPort);
         if (certProvider != nullptr) {
-            mCMCommSecureChannel = comManager.CreateChannel(cfg.mCMConfig.mSecurePort, certProvider);
+            LOG_DBG() << "Create CM secure channel port=" << cfg.mCMConfig.mSecurePort
+                      << " certStorage=" << cfg.mVChan.mSMCertStorage.c_str();
+
+            mCMCommSecureChannel
+                = comManager.CreateChannel(cfg.mCMConfig.mSecurePort, certProvider, cfg.mVChan.mSMCertStorage);
             mDownloader.emplace(cfg.mDownload.mDownloadDir);
             mImageUnpacker.emplace(cfg.mImageStoreDir);
         }
@@ -42,8 +48,7 @@ aos::Error CMConnection::Init(const Config& cfg, CertProviderItf* certProvider, 
     }
 
     StartTask([this] { RunOpenChannel(); });
-    // StartTask([this] { RunSecureChannel(); });
-    // StartTask([this] { RunFilterMessage(); });
+    StartTask([this] { RunSecureChannel(); });
 
     return aos::ErrorEnum::eNone;
 }
@@ -59,16 +64,17 @@ void CMConnection::Close()
         mCondVar.notify_all();
     }
 
-    mOpenMsgChannel.Close();
     mCMCommOpenChannel->Close();
 
     if (mCMCommSecureChannel != nullptr) {
-        mSecureMsgChannel.Close();
+        mHandler->OnDisconnected();
         mCMCommSecureChannel->Close();
     }
 
     mTaskManager.cancelAll();
     mTaskManager.joinAll();
+
+    LOG_DBG() << "Close CMConnection finished";
 }
 
 /***********************************************************************************************************************
@@ -85,7 +91,7 @@ void CMConnection::RunSecureChannel()
 
     while (!mShutdown) {
         if (auto err = mCMCommSecureChannel->Connect(); !err.IsNone()) {
-            LOG_ERR() << "Failed to connect error=" << err;
+            LOG_ERR() << "Failed to connect: error=" << err;
 
             std::unique_lock<std::mutex> lock(mMutex);
 
@@ -93,6 +99,8 @@ void CMConnection::RunSecureChannel()
 
             continue;
         }
+
+        mHandler->OnConnected();
 
         LOG_DBG() << "Secure CM channel connected";
 
@@ -112,7 +120,7 @@ void CMConnection::RunOpenChannel()
 
     while (!mShutdown) {
         if (auto err = mCMCommOpenChannel->Connect(); !err.IsNone()) {
-            LOG_ERR() << "Failed to connect CM error=" << err;
+            LOG_ERR() << "Failed to connect CM: error=" << err;
 
             std::unique_lock<std::mutex> lock(mMutex);
 
@@ -121,56 +129,12 @@ void CMConnection::RunOpenChannel()
             continue;
         }
 
-        auto readFuture  = StartTaskWithWait([this]() { ReadOpenMsgHandler(); });
-        auto writeFuture = StartTaskWithWait([this]() { WriteOpenMsgHandler(); });
+        auto readFuture = StartTaskWithWait([this]() { ReadOpenMsgHandler(); });
 
         readFuture.wait();
-        writeFuture.wait();
     }
 
     LOG_DBG() << "Open channel stopped";
-}
-
-void CMConnection::RunFilterMessage()
-{
-    LOG_DBG() << "Run filter message";
-
-    while (!mShutdown) {
-        auto message = mChannel->Receive();
-        if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive message error=" << message.mError;
-
-            return;
-        }
-
-        if (IsPublicMessage(message.mValue)) {
-            LOG_DBG() << "Public message received";
-
-            if (auto err = mOpenMsgChannel.Send(message.mValue); !err.IsNone()) {
-                LOG_ERR() << "Failed to send message error=" << err;
-
-                return;
-            }
-
-            continue;
-        }
-
-        LOG_DBG() << "Secure message received";
-
-        if (mCMCommSecureChannel != nullptr) {
-            if (auto err = mSecureMsgChannel.Send(message.mValue); !err.IsNone()) {
-                LOG_ERR() << "Failed to send message error=" << err;
-
-                return;
-            }
-
-            continue;
-        }
-
-        LOG_ERR() << "Secure channel is not initialized";
-    }
-
-    LOG_DBG() << "Filter message stopped";
 }
 
 bool CMConnection::IsPublicMessage(const std::vector<uint8_t>& message)
@@ -190,7 +154,7 @@ void CMConnection::ReadSecureMsgHandler()
     while (!mShutdown) {
         auto [message, err] = ReadMessage(mCMCommSecureChannel);
         if (!err.IsNone()) {
-            LOG_ERR() << "Failed to read secure message error=" << err;
+            LOG_ERR() << "Failed to read secure message: error=" << err;
 
             return;
         }
@@ -209,15 +173,15 @@ void CMConnection::ReadSecureMsgHandler()
                           requestID   = outgoingMessages.image_content_request().request_id(),
                           contentType = outgoingMessages.image_content_request().content_type()] {
                 if (auto err = Download(url, requestID, contentType); !err.IsNone()) {
-                    LOG_ERR() << "Failed to download error=" << err;
+                    LOG_ERR() << "Failed to download: error=" << err;
                 }
             });
 
             continue;
         }
 
-        if (auto err = mChannel->Send(std::move(message)); !err.IsNone()) {
-            LOG_ERR() << "Failed to send message error=" << err;
+        if (auto err = mHandler->SendMessages(std::move(message)); !err.IsNone()) {
+            LOG_ERR() << "Failed to send message: error=" << err;
 
             return;
         }
@@ -226,7 +190,7 @@ void CMConnection::ReadSecureMsgHandler()
 
 aos::Error CMConnection::SendFailedImageContentResponse(uint64_t requestID, const aos::Error& err)
 {
-    LOG_ERR() << "Send failed image content response requestID=" << requestID << " error=" << err;
+    LOG_ERR() << "Send failed image content response: requestID=" << requestID << " error=" << err;
 
     servicemanager::v4::SMIncomingMessages incomingMessages;
 
@@ -251,7 +215,8 @@ aos::Error CMConnection::SendFailedImageContentResponse(uint64_t requestID, cons
 
 aos::Error CMConnection::Download(const std::string& url, uint64_t requestID, const std::string& contentType)
 {
-    LOG_DBG() << "Download url=" << url.c_str() << " requestID=" << requestID << " contentType=" << contentType.c_str();
+    LOG_DBG() << "Download: url=" << url.c_str() << " requestID=" << requestID
+              << " contentType=" << contentType.c_str();
 
     auto [fileName, err] = mDownloader->DownloadSync(url);
     if (!err.IsNone()) {
@@ -279,7 +244,7 @@ aos::Error CMConnection::Download(const std::string& url, uint64_t requestID, co
         return err;
     }
 
-    LOG_DBG() << "Image content sent requestID=" << requestID;
+    LOG_DBG() << "Image content sent: requestID=" << requestID;
 
     return aos::ErrorEnum::eNone;
 }
@@ -294,7 +259,7 @@ aos::Error CMConnection::SendImageContentInfo(const ContentInfo& contentInfo)
     for (const auto& imageFile : contentInfo.mImageFiles) {
         auto imageFileProto = imageContentInfo->add_image_files();
 
-        LOG_DBG() << "Send image file relativePath=" << imageFile.mRelativePath.c_str();
+        LOG_DBG() << "Send image file: relativePath=" << imageFile.mRelativePath.c_str();
 
         imageFileProto->set_relative_path(imageFile.mRelativePath);
         imageFileProto->set_sha256(imageFile.mSha256.data(), imageFile.mSha256.size());
@@ -343,7 +308,7 @@ aos::RetWithError<ContentInfo> CMConnection::GetFileContent(
         return {ContentInfo(), err};
     }
 
-    LOG_DBG() << "Unpacked image unpackedDir=" << unpackedDir.c_str() << " requestID=" << requestID;
+    LOG_DBG() << "Unpacked image: unpackedDir=" << unpackedDir.c_str() << " requestID=" << requestID;
 
     return ChunkFiles(unpackedDir, requestID);
 }
@@ -355,7 +320,7 @@ void CMConnection::ReadOpenMsgHandler()
     while (!mShutdown) {
         auto [message, err] = ReadMessage(mCMCommOpenChannel);
         if (!err.IsNone()) {
-            LOG_ERR() << "Failed to read open message error=" << err;
+            LOG_ERR() << "Failed to read open message: error=" << err;
 
             return;
         }
@@ -369,14 +334,14 @@ void CMConnection::ReadOpenMsgHandler()
 
         if (outgoingMessages.has_clock_sync_request()) {
             if (auto err = SendSMClockSync(); !err.IsNone()) {
-                LOG_ERR() << "Failed to send clock sync error=" << err;
+                LOG_ERR() << "Failed to send clock sync: error=" << err;
             }
 
             continue;
         }
 
-        if (auto err = mChannel->Send(message); !err.IsNone()) {
-            LOG_ERR() << "Failed to send message error=" << err;
+        if (auto err = mHandler->SendMessages(std::move(message)); !err.IsNone()) {
+            LOG_ERR() << "Failed to send message: error=" << err;
 
             return;
         }
@@ -410,35 +375,15 @@ void CMConnection::WriteSecureMsgHandler()
     LOG_DBG() << "Write secure message handler";
 
     while (!mShutdown) {
-        auto message = mSecureMsgChannel.Receive();
+        auto message = mHandler->ReceiveMessages();
         if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive secure message error=" << message.mError;
+            LOG_ERR() << "Failed to receive message error=" << message.mError;
 
             return;
         }
 
         if (auto err = SendMessage(std::move(message.mValue), mCMCommSecureChannel); !err.IsNone()) {
             LOG_ERR() << "Failed to write secure message error=" << err;
-
-            return;
-        }
-    }
-}
-
-void CMConnection::WriteOpenMsgHandler()
-{
-    LOG_DBG() << "Write open message handler";
-
-    while (!mShutdown) {
-        auto message = mOpenMsgChannel.Receive();
-        if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive open message error=" << message.mError;
-
-            return;
-        }
-
-        if (auto err = SendMessage(std::move(message.mValue), mCMCommOpenChannel); !err.IsNone()) {
-            LOG_ERR() << "Failed to write open message error=" << err;
 
             return;
         }

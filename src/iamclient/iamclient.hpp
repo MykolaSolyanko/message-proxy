@@ -12,7 +12,6 @@
 #include <optional>
 #include <string>
 
-#include <utils/bidirectionalchannel.hpp>
 #include <utils/grpchelper.hpp>
 
 #include "config/config.hpp"
@@ -38,8 +37,7 @@ public:
      * @return aos::Error.
      */
     aos::Error Init(const Config& cfg, aos::cryptoutils::CertLoaderItf& certLoader,
-        aos::crypto::x509::ProviderItf&                                 cryptoProvider,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool provisioningMode = false,
+        aos::crypto::x509::ProviderItf& cryptoProvider, bool provisioningMode = false,
         MTLSCredentialsFunc mtlsCredentialsFunc = aos::common::utils::GetMTLSClientCredentials);
 
     /**
@@ -66,9 +64,24 @@ public:
      */
     aos::Error GetCertificate(const std::string& certType, aos::iam::certhandler::CertInfo& certInfo) override;
 
+    /**
+     * Get public handler.
+     *
+     * @return Public handler.
+     */
+    HandlerItf& GetPublicHandler() { return mPublicNodeClient.value(); }
+
+    /**
+     * Get protected handler.
+     *
+     * @return Protected handler.
+     */
+    HandlerItf& GetProtectedHandler() { return mProtectedNodeClient.value(); }
+
 private:
     std::optional<PublicServiceHandler> mPublicServiceHandler;
     std::optional<PublicNodeClient>     mPublicNodeClient;
+    std::optional<PublicNodeClient>     mProtectedNodeClient;
 };
 
 #endif

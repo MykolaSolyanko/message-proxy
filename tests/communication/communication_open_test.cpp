@@ -21,15 +21,10 @@ class CommunicationOpenManagerTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        aos::InitLogs();
+        aos::InitLog();
 
-        mConfig.mIAMConfig.mPort    = 8080;
-        mConfig.mCMConfig.mOpenPort = 30001;
-        mIAMChannelFactory.emplace();
-        mIAMChannel.emplace(mIAMChannelFactory->GetChannel());
-
-        mCMChannelFactory.emplace();
-        mCmChannel.emplace(mCMChannelFactory->GetChannel());
+        mConfig.mIAMConfig.mOpenPort = 8080;
+        mConfig.mCMConfig.mOpenPort  = 30001;
 
         mPipePair.emplace();
         mPipe1.emplace();
@@ -46,10 +41,10 @@ protected:
 
     void TearDown() override
     {
-        mIAMChannelFactory->Close();
-        mCMChannelFactory->Close();
         mPipe2->Close();
         mCommManager->Close();
+        mIAMConnection.Close();
+        mCMConnection.Close();
     }
 
     std::optional<PipePair> mPipePair;
@@ -59,18 +54,16 @@ protected:
     std::shared_ptr<CommChannelItf> mIAMClientChannel;
     std::shared_ptr<CommChannelItf> mCMClientChannel;
     std::optional<CommManager>      mCommManagerClient;
-    AosProtocol                     mProtocol;
 
-    std::optional<CommunicationManager> mCommManager;
     Config                              mConfig;
     CertProviderItf*                    mCertProvider {};
     aos::cryptoutils::CertLoaderItf*    mCertLoader {};
     aos::crypto::x509::ProviderItf*     mCryptoProvider {};
-
-    std::optional<aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>> mIAMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mIAMChannel;
-    std::optional<aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>> mCMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mCmChannel;
+    Handler                             IAMHandler {};
+    Handler                             CMHandler {};
+    IAMConnection                       mIAMConnection {};
+    CMConnection                        mCMConnection {};
+    std::optional<CommunicationManager> mCommManager;
 };
 
 /***********************************************************************************************************************
@@ -79,10 +72,13 @@ protected:
 
 TEST_F(CommunicationOpenManagerTest, TestOpenIAMChannel)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
+    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value()), aos::ErrorEnum::eNone);
 
-    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel), aos::ErrorEnum::eNone);
+    auto err = mIAMConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     iamanager::v5::IAMOutgoingMessages outgoingMsg;
     outgoingMsg.mutable_start_provisioning_response();
@@ -90,11 +86,11 @@ TEST_F(CommunicationOpenManagerTest, TestOpenIAMChannel)
     std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData.size());
     protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
     EXPECT_EQ(mIAMClientChannel->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg, errReceive] = mIAMChannel->Receive();
+    auto [receivedMsg, errReceive] = IAMHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive, aos::ErrorEnum::eNone);
     EXPECT_TRUE(outgoingMsg.ParseFromArray(receivedMsg.data(), receivedMsg.size()));
     EXPECT_TRUE(outgoingMsg.has_start_provisioning_response());
@@ -104,12 +100,12 @@ TEST_F(CommunicationOpenManagerTest, TestOpenIAMChannel)
     std::vector<uint8_t> messageData2(smOutgoingMessages.ByteSizeLong());
     EXPECT_TRUE(smOutgoingMessages.SerializeToArray(messageData2.data(), messageData2.size()));
 
-    protobufHeader = mProtocol.PrepareProtobufHeader(messageData2.size());
+    protobufHeader = PrepareProtobufHeader(messageData2.size());
     protobufHeader.insert(protobufHeader.end(), messageData2.begin(), messageData2.end());
 
     EXPECT_EQ(mCMClientChannel->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg2, errReceive2] = mCmChannel->Receive();
+    auto [receivedMsg2, errReceive2] = CMHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive2, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(smOutgoingMessages.ParseFromArray(receivedMsg2.data(), receivedMsg2.size()));
@@ -118,23 +114,26 @@ TEST_F(CommunicationOpenManagerTest, TestOpenIAMChannel)
 
 TEST_F(CommunicationOpenManagerTest, TestSyncClockRequest)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
+    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value()), aos::ErrorEnum::eNone);
 
-    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel), aos::ErrorEnum::eNone);
+    auto err = mIAMConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     servicemanager::v4::SMOutgoingMessages outgoingMessages;
     outgoingMessages.mutable_clock_sync_request();
 
     std::vector<uint8_t> messageData(outgoingMessages.ByteSizeLong());
     EXPECT_TRUE(outgoingMessages.SerializeToArray(messageData.data(), messageData.size()));
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData.size());
     protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
     EXPECT_EQ(mCMClientChannel->Write(protobufHeader), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mCMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -152,21 +151,24 @@ TEST_F(CommunicationOpenManagerTest, TestSyncClockRequest)
 
 TEST_F(CommunicationOpenManagerTest, TestSendIAMIncomingMessages)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
+    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value()), aos::ErrorEnum::eNone);
 
-    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel), aos::ErrorEnum::eNone);
+    auto err = mIAMConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     iamanager::v5::IAMIncomingMessages outgoingMsg;
     outgoingMsg.mutable_start_provisioning_request();
     std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    EXPECT_EQ(mIAMChannel->Send(messageData), aos::ErrorEnum::eNone);
+    EXPECT_EQ(IAMHandler.SetIncomingMessages(messageData), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mIAMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -176,49 +178,26 @@ TEST_F(CommunicationOpenManagerTest, TestSendIAMIncomingMessages)
     EXPECT_TRUE(incomingMessages.has_start_provisioning_request());
 }
 
-TEST_F(CommunicationOpenManagerTest, TestSendClockSync)
-{
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel), aos::ErrorEnum::eNone);
-
-    servicemanager::v4::SMIncomingMessages outgoingMsg;
-    outgoingMsg.mutable_clock_sync();
-    std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
-    EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
-
-    EXPECT_EQ(mCmChannel->Send(messageData), aos::ErrorEnum::eNone);
-
-    std::vector<uint8_t> message(sizeof(AosProtobufHeader));
-    EXPECT_EQ(mCMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
-    message.clear();
-    message.resize(header.mDataSize);
-
-    EXPECT_EQ(mCMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    servicemanager::v4::SMIncomingMessages incomingMessages;
-    EXPECT_TRUE(incomingMessages.ParseFromArray(message.data(), message.size()));
-    EXPECT_TRUE(incomingMessages.has_clock_sync());
-}
-
 TEST_F(CommunicationOpenManagerTest, TestIAMFlow)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
+    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value()), aos::ErrorEnum::eNone);
 
-    EXPECT_EQ(mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel), aos::ErrorEnum::eNone);
+    auto err = mIAMConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     iamanager::v5::IAMIncomingMessages outgoingMsg;
     outgoingMsg.mutable_start_provisioning_request();
     std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    EXPECT_EQ(mIAMChannel->Send(messageData), aos::ErrorEnum::eNone);
+    EXPECT_EQ(IAMHandler.SetIncomingMessages(messageData), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mIAMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -232,11 +211,11 @@ TEST_F(CommunicationOpenManagerTest, TestIAMFlow)
     std::vector<uint8_t> messageData2(outgoingMsg2.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg2.SerializeToArray(messageData2.data(), messageData2.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData2.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData2.size());
     protobufHeader.insert(protobufHeader.end(), messageData2.begin(), messageData2.end());
     EXPECT_EQ(mIAMClientChannel->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg, errReceive] = mIAMChannel->Receive();
+    auto [receivedMsg, errReceive] = IAMHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive, aos::ErrorEnum::eNone);
     EXPECT_TRUE(outgoingMsg2.ParseFromArray(receivedMsg.data(), receivedMsg.size()));
     EXPECT_TRUE(outgoingMsg2.has_start_provisioning_response());

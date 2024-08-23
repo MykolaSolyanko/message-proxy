@@ -64,7 +64,7 @@ protected:
 
     void SetUp() override
     {
-        aos::InitLogs();
+        aos::InitLog();
 
         std::filesystem::create_directories(mTmpDir);
 
@@ -73,19 +73,16 @@ protected:
         // OSSL_trace_set_prefix(OSSL_TRACE_CATEGORY_TLS, "BEGIN TRACE[TLS]");
         // OSSL_trace_set_suffix(OSSL_TRACE_CATEGORY_TLS, "END TRACE[TLS]");
 
-        mConfig.mIAMConfig.mPort       = 8080;
-        mConfig.mVChan.mCertStorage    = "server";
+        mConfig.mIAMConfig.mOpenPort   = 8081;
+        mConfig.mIAMConfig.mSecurePort = 8080;
+        mConfig.mVChan.mIAMCertStorage = "server";
+        mConfig.mVChan.mSMCertStorage  = "server";
         mConfig.mDownload.mDownloadDir = "download";
         mConfig.mImageStoreDir         = "images";
         mConfig.mCMConfig.mOpenPort    = 30001;
         mConfig.mCMConfig.mSecurePort  = 30002;
 
         mConfig.mCACert = CERTIFICATES_DIR "/ca.cer";
-        mIAMChannelFactory.emplace();
-        mIAMChannel.emplace(mIAMChannelFactory->GetChannel());
-
-        mCMChannelFactory.emplace();
-        mCmChannel.emplace(mCMChannelFactory->GetChannel());
 
         ASSERT_TRUE(mCryptoProvider.Init().IsNone());
         ASSERT_TRUE(mSOFTHSMEnv
@@ -210,11 +207,12 @@ protected:
         std::filesystem::remove_all(mConfig.mDownload.mDownloadDir);
         std::filesystem::remove_all(mConfig.mImageStoreDir);
 
-        mIAMChannelFactory->Close();
-        mCMChannelFactory->Close();
         mPipe1->Close();
         mPipe2->Close();
         mCommManager->Close();
+        mIAMOpenConnection.Close();
+        mIAMSecureConnection.Close();
+        mCMConnection.Close();
         mIAMSecurePipe->Close();
         mCMSecurePipe->Close();
 
@@ -240,11 +238,6 @@ protected:
     std::optional<CommunicationManager> mCommManager;
     Config                              mConfig;
 
-    std::optional<aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>> mIAMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mIAMChannel;
-    std::optional<aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>> mCMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mCmChannel;
-
     std::shared_ptr<CommChannelItf> mIAMClientChannel;
     std::shared_ptr<CommChannelItf> mCMClientChannel;
     std::shared_ptr<CommChannelItf> mOpenCMClientChannel;
@@ -252,7 +245,13 @@ protected:
     std::optional<SecureClientChannel> mIAMSecurePipe;
     std::optional<SecureClientChannel> mCMSecurePipe;
     std::optional<CommManager>         mCommManagerClient;
-    AosProtocol                        mProtocol;
+    Handler                            IAMOpenHandler {};
+    Handler                            IAMSecureHandler {};
+    Handler                            CMHandler {};
+
+    IAMConnection mIAMOpenConnection {};
+    IAMConnection mIAMSecureConnection {};
+    CMConnection  mCMConnection {};
 
     std::string mTmpDir {"tmp"};
 
@@ -269,18 +268,24 @@ private:
 
 TEST_F(CommunicationSecureManagerTest, TestSecureChannel)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    auto err = mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel, &mCertProvider.value(),
-        &mCertLoader, &mCryptoProvider);
-
+    auto err = mCommManager->Init(mConfig, mPipe1.value(), &mCertProvider.value(), &mCertLoader, &mCryptoProvider);
     EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    err = mIAMOpenConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMOpenHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mIAMSecureConnection.Init(mConfig.mIAMConfig.mSecurePort, IAMSecureHandler, *mCommManager,
+        &mCertProvider.value(), mConfig.mVChan.mIAMCertStorage);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager, &mCertProvider.value());
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     // connect to IAM
     EXPECT_EQ(mIAMSecurePipe->Connect(), aos::ErrorEnum::eNone);
+
+    // connect to CM
+    EXPECT_EQ(mCMSecurePipe->Connect(), aos::ErrorEnum::eNone);
 
     // send message to IAM
     iamanager::v5::IAMOutgoingMessages outgoingMsg;
@@ -288,17 +293,14 @@ TEST_F(CommunicationSecureManagerTest, TestSecureChannel)
     std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData.size());
     protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
     EXPECT_EQ(mIAMSecurePipe->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg, errReceive] = mIAMChannel->Receive();
+    auto [receivedMsg, errReceive] = IAMSecureHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive, aos::ErrorEnum::eNone);
     EXPECT_TRUE(outgoingMsg.ParseFromArray(receivedMsg.data(), receivedMsg.size()));
     EXPECT_TRUE(outgoingMsg.has_start_provisioning_response());
-
-    // connect to CM
-    EXPECT_EQ(mCMSecurePipe->Connect(), aos::ErrorEnum::eNone);
 
     // send message to CM
     servicemanager::v4::SMOutgoingMessages smOutgoingMessages;
@@ -306,29 +308,32 @@ TEST_F(CommunicationSecureManagerTest, TestSecureChannel)
     std::vector<uint8_t> messageData2(smOutgoingMessages.ByteSizeLong());
     EXPECT_TRUE(smOutgoingMessages.SerializeToArray(messageData2.data(), messageData2.size()));
 
-    protobufHeader = mProtocol.PrepareProtobufHeader(messageData2.size());
+    protobufHeader = PrepareProtobufHeader(messageData2.size());
     protobufHeader.insert(protobufHeader.end(), messageData2.begin(), messageData2.end());
 
     EXPECT_EQ(mCMSecurePipe->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg2, errReceive2] = mCmChannel->Receive();
+    auto [receivedMsg2, errReceive2] = CMHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive2, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(smOutgoingMessages.ParseFromArray(receivedMsg2.data(), receivedMsg2.size()));
     EXPECT_TRUE(smOutgoingMessages.has_node_config_status());
 }
 
-TEST_F(CommunicationSecureManagerTest, TestSyncClockRequest)
+TEST_F(CommunicationSecureManagerTest, TestIAMFlow)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    auto err = mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel, &mCertProvider.value(),
-        &mCertLoader, &mCryptoProvider);
-
+    auto err = mCommManager->Init(mConfig, mPipe1.value(), &mCertProvider.value(), &mCertLoader, &mCryptoProvider);
     EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    err = mIAMOpenConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMOpenHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mIAMSecureConnection.Init(mConfig.mIAMConfig.mSecurePort, IAMSecureHandler, *mCommManager,
+        &mCertProvider.value(), mConfig.mVChan.mIAMCertStorage);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager, &mCertProvider.value());
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
     // connect to IAM
     EXPECT_EQ(mIAMSecurePipe->Connect(), aos::ErrorEnum::eNone);
@@ -336,51 +341,15 @@ TEST_F(CommunicationSecureManagerTest, TestSyncClockRequest)
     // connect to CM
     EXPECT_EQ(mCMSecurePipe->Connect(), aos::ErrorEnum::eNone);
 
-    servicemanager::v4::SMOutgoingMessages outgoingMessages;
-    outgoingMessages.mutable_clock_sync_request();
-
-    std::vector<uint8_t> messageData(outgoingMessages.ByteSizeLong());
-    EXPECT_TRUE(outgoingMessages.SerializeToArray(messageData.data(), messageData.size()));
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
-    protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
-    EXPECT_EQ(mOpenCMClientChannel->Write(protobufHeader), aos::ErrorEnum::eNone);
-
-    std::vector<uint8_t> message(sizeof(AosProtobufHeader));
-    EXPECT_EQ(mOpenCMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
-    message.clear();
-    message.resize(header.mDataSize);
-
-    EXPECT_EQ(mOpenCMClientChannel->Read(message), aos::ErrorEnum::eNone);
-    servicemanager::v4::SMIncomingMessages incomingMessages;
-    EXPECT_TRUE(incomingMessages.ParseFromArray(message.data(), message.size()));
-    EXPECT_TRUE(incomingMessages.has_clock_sync());
-}
-
-TEST_F(CommunicationSecureManagerTest, TestIAMFlow)
-{
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    auto err = mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel, &mCertProvider.value(),
-        &mCertLoader, &mCryptoProvider);
-
-    EXPECT_EQ(err, aos::ErrorEnum::eNone);
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
-    // connect to IAM
-    EXPECT_EQ(mIAMSecurePipe->Connect(), aos::ErrorEnum::eNone);
-
     iamanager::v5::IAMIncomingMessages incomingMsg;
     incomingMsg.mutable_start_provisioning_request();
     std::vector<uint8_t> messageData(incomingMsg.ByteSizeLong());
     EXPECT_TRUE(incomingMsg.SerializeToArray(messageData.data(), messageData.size()));
-    EXPECT_EQ(mIAMChannel->Send(messageData), aos::ErrorEnum::eNone);
+    EXPECT_EQ(IAMSecureHandler.SetIncomingMessages(messageData), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mIAMSecurePipe->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -395,11 +364,11 @@ TEST_F(CommunicationSecureManagerTest, TestIAMFlow)
     messageData.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData.size());
     protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
     EXPECT_EQ(mIAMSecurePipe->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg, errReceive] = mIAMChannel->Receive();
+    auto [receivedMsg, errReceive] = IAMSecureHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive, aos::ErrorEnum::eNone);
     EXPECT_TRUE(outgoingMsg.ParseFromArray(receivedMsg.data(), receivedMsg.size()));
     EXPECT_TRUE(outgoingMsg.has_start_provisioning_response());
@@ -407,27 +376,34 @@ TEST_F(CommunicationSecureManagerTest, TestIAMFlow)
 
 TEST_F(CommunicationSecureManagerTest, TestSendCMFlow)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    auto err = mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel, &mCertProvider.value(),
-        &mCertLoader, &mCryptoProvider);
-
+    auto err = mCommManager->Init(mConfig, mPipe1.value(), &mCertProvider.value(), &mCertLoader, &mCryptoProvider);
     EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    err = mIAMOpenConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMOpenHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
+    err = mIAMSecureConnection.Init(mConfig.mIAMConfig.mSecurePort, IAMSecureHandler, *mCommManager,
+        &mCertProvider.value(), mConfig.mVChan.mIAMCertStorage);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager, &mCertProvider.value());
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    // connect to IAM
+    EXPECT_EQ(mIAMSecurePipe->Connect(), aos::ErrorEnum::eNone);
+
+    // connect to CM
     EXPECT_EQ(mCMSecurePipe->Connect(), aos::ErrorEnum::eNone);
 
     servicemanager::v4::SMIncomingMessages incomingMsg;
     incomingMsg.mutable_get_node_config_status();
     std::vector<uint8_t> messageData(incomingMsg.ByteSizeLong());
     EXPECT_TRUE(incomingMsg.SerializeToArray(messageData.data(), messageData.size()));
-    EXPECT_EQ(mCmChannel->Send(messageData), aos::ErrorEnum::eNone);
+    EXPECT_EQ(CMHandler.SetIncomingMessages(messageData), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mCMSecurePipe->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -441,12 +417,12 @@ TEST_F(CommunicationSecureManagerTest, TestSendCMFlow)
     std::vector<uint8_t> messageData2(smOutgoingMessages.ByteSizeLong());
     EXPECT_TRUE(smOutgoingMessages.SerializeToArray(messageData2.data(), messageData2.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData2.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData2.size());
     protobufHeader.insert(protobufHeader.end(), messageData2.begin(), messageData2.end());
 
     EXPECT_EQ(mCMSecurePipe->Write(protobufHeader), aos::ErrorEnum::eNone);
 
-    auto [receivedMsg2, errReceive2] = mCmChannel->Receive();
+    auto [receivedMsg2, errReceive2] = CMHandler.GetOutgoingMessages();
     EXPECT_EQ(errReceive2, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(smOutgoingMessages.ParseFromArray(receivedMsg2.data(), receivedMsg2.size()));
@@ -455,16 +431,23 @@ TEST_F(CommunicationSecureManagerTest, TestSendCMFlow)
 
 TEST_F(CommunicationSecureManagerTest, TestDownload)
 {
-    auto iamReverseChannel = mIAMChannel->GetReverse();
-    auto cmReverseChannel  = mCmChannel->GetReverse();
-
-    auto err = mCommManager->Init(mConfig, mPipe1.value(), iamReverseChannel, cmReverseChannel, &mCertProvider.value(),
-        &mCertLoader, &mCryptoProvider);
-
+    auto err = mCommManager->Init(mConfig, mPipe1.value(), &mCertProvider.value(), &mCertLoader, &mCryptoProvider);
     EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    err = mIAMOpenConnection.Init(mConfig.mIAMConfig.mOpenPort, IAMOpenHandler, *mCommManager);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
 
+    err = mIAMSecureConnection.Init(mConfig.mIAMConfig.mSecurePort, IAMSecureHandler, *mCommManager,
+        &mCertProvider.value(), mConfig.mVChan.mIAMCertStorage);
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    err = mCMConnection.Init(mConfig, CMHandler, *mCommManager, &mCertProvider.value());
+    EXPECT_EQ(err, aos::ErrorEnum::eNone);
+
+    // connect to IAM
+    EXPECT_EQ(mIAMSecurePipe->Connect(), aos::ErrorEnum::eNone);
+
+    // connect to CM
     EXPECT_EQ(mCMSecurePipe->Connect(), aos::ErrorEnum::eNone);
 
     std::string archivePath = PrepareService(mTmpDir);
@@ -479,13 +462,13 @@ TEST_F(CommunicationSecureManagerTest, TestDownload)
     std::vector<uint8_t> messageData(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(messageData.data(), messageData.size()));
 
-    auto protobufHeader = mProtocol.PrepareProtobufHeader(messageData.size());
+    auto protobufHeader = PrepareProtobufHeader(messageData.size());
     protobufHeader.insert(protobufHeader.end(), messageData.begin(), messageData.end());
     EXPECT_EQ(mCMSecurePipe->Write(protobufHeader), aos::ErrorEnum::eNone);
 
     std::vector<uint8_t> message(sizeof(AosProtobufHeader));
     EXPECT_EQ(mCMSecurePipe->Read(message), aos::ErrorEnum::eNone);
-    auto header = mProtocol.ParseProtobufHeader(message);
+    auto header = ParseProtobufHeader(message);
     message.clear();
     message.resize(header.mDataSize);
 
@@ -502,7 +485,7 @@ TEST_F(CommunicationSecureManagerTest, TestDownload)
     for (int i = 0; i < imageCount; i++) {
         std::vector<uint8_t> message(sizeof(AosProtobufHeader));
         EXPECT_EQ(mCMSecurePipe->Read(message), aos::ErrorEnum::eNone);
-        auto header = mProtocol.ParseProtobufHeader(message);
+        auto header = ParseProtobufHeader(message);
         message.clear();
         message.resize(header.mDataSize);
 
@@ -513,7 +496,6 @@ TEST_F(CommunicationSecureManagerTest, TestDownload)
 
         EXPECT_EQ(incomingMessages.image_content().request_id(), 1);
         auto content = incomingMessages.image_content().relative_path();
-        // find in string service.py
         if (content.find("service.py") != std::string::npos) {
             foundService = true;
         }

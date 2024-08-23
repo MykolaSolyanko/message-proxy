@@ -12,24 +12,28 @@
  * Public
  **********************************************************************************************************************/
 
-VChan::VChan(const std::string& path, int domain)
-    : mPath(path)
-    , mDomain(domain)
+aos::Error VChan::Init(const VChanConfig& config)
 {
+    LOG_DBG() << "Initialize the virtual channel";
+
+    mConfig = config;
+
+    return aos::ErrorEnum::eNone;
 }
 
 aos::Error VChan::Connect()
 {
-    LOG_DBG() << "Connect to the virtual channel";
-
-    mVChan = libxenvchan_server_init(nullptr, mDomain, mPath.c_str(), 0, 0);
-    if (mVChan == nullptr) {
-        return aos::Error(aos::ErrorEnum::eFailed, "Failed to initialize the virtual channel");
+    if (mShutdown) {
+        return aos::ErrorEnum::eFailed;
     }
 
-    mVChan->blocking = -1; // error: overflow in conversion from 'int' to 'signed char:1' changes value from '1' to '-1'
+    LOG_DBG() << "Connect to the virtual channel";
 
-    return aos::ErrorEnum::eNone;
+    if (auto error = ConnectToVChan(mVChanRead, mConfig.mXSRXPath, mConfig.mDomain); !error.IsNone()) {
+        return error;
+    }
+
+    return ConnectToVChan(mVChanWrite, mConfig.mXSTXPath, mConfig.mDomain);
 }
 
 aos::Error VChan::Read(std::vector<uint8_t>& message)
@@ -39,9 +43,9 @@ aos::Error VChan::Read(std::vector<uint8_t>& message)
     int read {};
 
     while (read < static_cast<int>(message.size())) {
-        int len = libxenvchan_read(mVChan, message.data() + read, message.size() - read);
+        int len = libxenvchan_read(mVChanRead, message.data() + read, message.size() - read);
         if (len < 0) {
-            return aos::Error(aos::ErrorEnum::eFailed, "Failed to read from the virtual channel");
+            return len;
         }
 
         read += len;
@@ -57,9 +61,9 @@ aos::Error VChan::Write(std::vector<uint8_t> message)
     int written {};
 
     while (written < static_cast<int>(message.size())) {
-        int len = libxenvchan_write(mVChan, message.data() + written, message.size() - written);
+        int len = libxenvchan_write(mVChanWrite, message.data() + written, message.size() - written);
         if (len < 0) {
-            return aos::Error(aos::ErrorEnum::eFailed, "Failed to write to the virtual channel");
+            return len;
         }
 
         written += len;
@@ -72,7 +76,26 @@ aos::Error VChan::Close()
 {
     LOG_DBG() << "Close the virtual channel";
 
-    libxenvchan_close(mVChan);
+    libxenvchan_close(mVChanRead);
+    libxenvchan_close(mVChanWrite);
+
+    mShutdown = true;
+
+    return aos::ErrorEnum::eNone;
+}
+
+/***********************************************************************************************************************
+ * Private
+ **********************************************************************************************************************/
+
+aos::Error VChan::ConnectToVChan(struct libxenvchan*& vchan, const std::string& path, int domain)
+{
+    vchan = libxenvchan_server_init(nullptr, domain, path.c_str(), 0, 0);
+    if (vchan == nullptr) {
+        return aos::Error(aos::ErrorEnum::eFailed, errno != 0 ? strerror(errno) : "failed to connect");
+    }
+
+    vchan->blocking = 0x1;
 
     return aos::ErrorEnum::eNone;
 }

@@ -12,14 +12,12 @@
 #include <mutex>
 #include <vector>
 
-#include <utils/channel.hpp>
-
 #include "types.hpp"
 
 /**
  * Communication channel class
  */
-class CommunicationChannel : public CommChannelItf, public AosProtocol {
+class CommunicationChannel : public CommChannelItf {
 public:
     /**
      * Constructor.
@@ -70,11 +68,11 @@ private:
     static std::mutex mCommChannelMutex;
 
     CommChannelItf*         mCommChannel {};
-    int                     mPort;
+    int                     mPort {-1};
+    bool                    mShutdown {false};
     std::vector<uint8_t>    mReceivedMessage;
     std::mutex              mMutex;
     std::condition_variable mCondVar;
-    bool                    mShutdown {false};
 };
 
 #endif /* COMMUNICATIONCHANNEL_HPP_ */

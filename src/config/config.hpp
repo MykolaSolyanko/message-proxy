@@ -34,7 +34,8 @@ struct VChanConfig {
     int         mDomain;
     std::string mXSRXPath;
     std::string mXSTXPath;
-    std::string mCertStorage;
+    std::string mIAMCertStorage;
+    std::string mSMCertStorage;
 };
 
 /*
@@ -44,7 +45,8 @@ struct IAMConfig {
     std::string mIAMPublicServerURL;
     std::string mIAMProtectedServerURL;
     std::string mCertStorage;
-    int         mPort;
+    int         mOpenPort;
+    int         mSecurePort;
 };
 
 /*
