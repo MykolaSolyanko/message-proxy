@@ -79,6 +79,8 @@ aos::Error PublicServiceHandler::GetCertificate(const std::string& certType, aos
     certInfo.mCertURL = response.cert_url().c_str();
     certInfo.mKeyURL  = response.key_url().c_str();
 
+    LOG_DBG() << "Certificate received: certURL=" << certInfo.mCertURL.CStr() << ", keyURL=" << certInfo.mKeyURL.CStr();
+
     return aos::ErrorEnum::eNone;
 }
 

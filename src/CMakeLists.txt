@@ -46,6 +46,10 @@ add_executable(${TARGET} ${SOURCES})
 # Libraries
 # ######################################################################################################################
 
+# if(WITH_VCHAN)
+#     target_link_libraries(${TARGET} PUBLIC Xenvchan::Xenvchan)
+# endif()
+
 target_link_libraries(${TARGET} aoscommon app)
 
 # ######################################################################################################################

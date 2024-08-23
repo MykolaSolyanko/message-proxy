@@ -1,131 +1,171 @@
+/*
+ * Copyright (C) 2024 Renesas Electronics Corporation.
+ * Copyright (C) 2024 EPAM Systems, Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "socket.hpp"
 #include "logger/logmodule.hpp"
-#include <arpa/inet.h>
-#include <cerrno>
-#include <cstring>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <Poco/Net/SocketAddress.h>
 
-Socket::Socket(int port)
-    : mPort(port)
-    , mFd(-1)
-    , mServerFd(-1)
+/***********************************************************************************************************************
+ * Public
+ **********************************************************************************************************************/
+
+aos::Error Socket::Init(int port)
 {
-    LOG_DBG() << "Socket created with Port: " << mPort;
+    LOG_DBG() << "Initializing socket with: port=" << port;
+
+    mPort = port;
+
+    try {
+        mServerSocket.bind(Poco::Net::SocketAddress("0.0.0.0", mPort), true, true);
+        mServerSocket.listen(1);
+
+        mReactor.addEventHandler(
+            mServerSocket, Poco::Observer<Socket, Poco::Net::ReadableNotification>(*this, &Socket::OnAccept));
+
+        mReactorThread = std::thread(&Socket::ReactorThread, this);
+
+        LOG_DBG() << "Socket initialized and listening on: port=" << mPort;
+    } catch (const Poco::Exception& e) {
+        return aos::Error {aos::ErrorEnum::eRuntime, e.displayText().c_str()};
+    }
+
+    return aos::ErrorEnum::eNone;
 }
 
 aos::Error Socket::Connect()
 {
-    LOG_DBG() << "Starting TCP server";
-
-    mServerFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (mServerFd == -1) {
-        LOG_ERR() << "Failed to create socket: " << strerror(errno);
-        return aos::Error {errno};
+    if (mShutdown) {
+        return aos::ErrorEnum::eFailed;
     }
 
-    struct sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family      = AF_INET;
-    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serverAddr.sin_port        = htons(mPort);
+    LOG_DBG() << "Waiting for client connection";
 
-    if (bind(mServerFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        LOG_ERR() << "Bind failed: " << strerror(errno);
-        Close();
-        return aos::Error {errno};
+    std::unique_lock<std::mutex> lock(mMutex);
+    mCV.wait(lock, [this] { return mConnectionAccepted || mShutdown; });
+    mConnectionAccepted = false;
+
+    if (mShutdown) {
+        return aos::Error {EINTR};
     }
 
-    if (listen(mServerFd, 1) < 0) {
-        LOG_ERR() << "Listen failed: " << strerror(errno);
-        Close();
-        return aos::Error {errno};
+    return aos::ErrorEnum::eNone;
+}
+
+aos::Error Socket::Close()
+{
+    LOG_DBG() << "Closing the current connection";
+
+    if (mShutdown) {
+        return aos::ErrorEnum::eNone;
     }
 
-    LOG_DBG() << "TCP Server started, listening on any address, Port: " << mPort;
+    mShutdown = true;
+    mReactor.stop();
 
-    // Accept a client connection
-    struct sockaddr_in clientAddr;
-    socklen_t          clientAddrLen = sizeof(clientAddr);
-
-    mFd = accept(mServerFd, (struct sockaddr*)&clientAddr, &clientAddrLen);
-    if (mFd < 0) {
-        LOG_ERR() << "Accept failed: " << strerror(errno);
-        Close();
-        return aos::Error {errno};
+    if (mReactorThread.joinable()) {
+        mReactorThread.join();
     }
 
-    char clientIP[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIP, INET_ADDRSTRLEN);
-    LOG_DBG() << "Client connected: " << clientIP << ":" << ntohs(clientAddr.sin_port);
+    mReactor.removeEventHandler(
+        mServerSocket, Poco::Observer<Socket, Poco::Net::ReadableNotification>(*this, &Socket::OnAccept));
+
+    try {
+        if (mClientSocket.impl()->initialized()) {
+            mClientSocket.shutdown();
+            mClientSocket.close();
+        }
+
+        mServerSocket.close();
+    } catch (const Poco::Exception& e) {
+        return aos::Error {aos::ErrorEnum::eRuntime, e.displayText().c_str()};
+    }
+
+    mCV.notify_all();
 
     return aos::ErrorEnum::eNone;
 }
 
 aos::Error Socket::Read(std::vector<uint8_t>& message)
 {
-    LOG_DBG() << "Read from the client, expected size=" << message.size();
+    LOG_DBG() << "Read from the client, expected: size=" << message.size();
 
-    ssize_t readBytes = 0;
-    while (readBytes < static_cast<ssize_t>(message.size())) {
-        ssize_t len = recv(mFd, message.data() + readBytes, message.size() - readBytes, 0);
-        if (len < 0) {
-            if (errno == EINTR) {
-                continue;
+    try {
+        int totalRead = 0;
+        while (totalRead < static_cast<int>(message.size())) {
+            int bytesRead = mClientSocket.receiveBytes(message.data() + totalRead, message.size() - totalRead);
+            if (bytesRead == 0) {
+                return aos::Error {ECONNRESET};
             }
-            LOG_ERR() << "Failed to read from socket: " << strerror(errno);
-            return aos::Error {errno};
-        } else if (len == 0) {
-            LOG_ERR() << "Client disconnected";
-            return aos::Error {ECONNRESET};
+
+            totalRead += bytesRead;
         }
 
-        readBytes += len;
+        LOG_DBG() << "Total read: totalRead=" << totalRead << " size=" << message.size();
+    } catch (const Poco::Exception& e) {
+        return aos::Error {aos::ErrorEnum::eRuntime, e.displayText().c_str()};
     }
 
-    LOG_DBG() << "Read " << readBytes << " bytes from client";
     return aos::ErrorEnum::eNone;
 }
 
 aos::Error Socket::Write(std::vector<uint8_t> message)
 {
-    LOG_DBG() << "Write to the client, size=" << message.size();
+    LOG_DBG() << "Write to the client: size=" << message.size();
 
-    ssize_t writtenBytes = 0;
-    while (writtenBytes < static_cast<ssize_t>(message.size())) {
-        ssize_t len = send(mFd, message.data() + writtenBytes, message.size() - writtenBytes, 0);
-        if (len < 0) {
-            if (errno == EINTR) {
-                continue;
+    try {
+        int totalSent = 0;
+        while (totalSent < static_cast<int>(message.size())) {
+            int bytesSent = mClientSocket.sendBytes(message.data() + totalSent, message.size() - totalSent);
+            if (bytesSent == 0) {
+                return aos::Error {ECONNRESET};
             }
-            LOG_ERR() << "Failed to write to socket: " << strerror(errno);
-            return aos::Error {errno};
-        } else if (len == 0) {
-            LOG_ERR() << "Client disconnected";
-            return aos::Error {ECONNRESET};
+
+            totalSent += bytesSent;
         }
 
-        writtenBytes += len;
+        LOG_DBG() << "Total written: totalSent=" << totalSent << " size=" << message.size();
+    } catch (const Poco::Exception& e) {
+        return aos::Error {aos::ErrorEnum::eRuntime, e.displayText().c_str()};
     }
 
-    LOG_DBG() << "Total written: " << writtenBytes << " bytes";
     return aos::ErrorEnum::eNone;
 }
 
-aos::Error Socket::Close()
+/***********************************************************************************************************************
+ * Private
+ **********************************************************************************************************************/
+
+void Socket::ReactorThread()
 {
-    LOG_DBG() << "Closing the TCP connection";
-
-    if (mFd != -1) {
-        close(mFd);
-        mFd = -1;
+    while (!mShutdown) {
+        try {
+            mReactor.run();
+        } catch (const Poco::Exception& e) {
+            if (!mShutdown) {
+                LOG_ERR() << "Reactor: error=" << e.displayText().c_str();
+            }
+        }
     }
+}
 
-    if (mServerFd != -1) {
-        close(mServerFd);
-        mServerFd = -1;
+void Socket::OnAccept([[maybe_unused]] Poco::Net::ReadableNotification* pNf)
+{
+    try {
+        mClientSocket = mServerSocket.acceptConnection();
+
+        LOG_DBG() << "Client connected: address=" << mClientSocket.peerAddress().toString().c_str();
+
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            mConnectionAccepted = true;
+        }
+
+        mCV.notify_all();
+    } catch (const Poco::Exception& e) {
+        LOG_ERR() << "Failed to accept connection: error=" << e.displayText().c_str();
     }
-
-    return aos::ErrorEnum::eNone;
 }

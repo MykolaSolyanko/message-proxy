@@ -131,7 +131,15 @@ aos::Error Downloader::Download(const std::string& url, const std::string& outfi
         return aos::Error(aos::ErrorEnum::eFailed, "Failed to init curl");
     }
 
-    std::unique_ptr<FILE, decltype(&fclose)> fp(fopen(outfilename.c_str(), "ab"), fclose);
+    auto fileCloser = [](FILE* fp) {
+        if (fp) {
+            if (auto res = fclose(fp); res != 0) {
+                LOG_ERR() << "Failed to close file: res=" << res;
+            }
+        }
+    };
+
+    std::unique_ptr<FILE, decltype(fileCloser)> fp(fopen(outfilename.c_str(), "ab"), fileCloser);
     if (!fp) {
         return aos::Error(aos::ErrorEnum::eFailed, "Failed to open file");
     }

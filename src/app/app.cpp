@@ -9,6 +9,10 @@
 #include <execinfo.h>
 #include <iostream>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/trace.h>
+
 #include <Poco/Path.h>
 #include <Poco/SignalHandler.h>
 #include <Poco/Util/HelpFormatter.h>
@@ -20,7 +24,6 @@
 #include "app.hpp"
 #include "logger/logmodule.hpp"
 // cppcheck-suppress missingInclude
-#include "communication/pipe_test.hpp"
 #include "version.hpp"
 
 /***********************************************************************************************************************
@@ -59,12 +62,6 @@ static void RegisterSegfaultSignal()
 
 void App::initialize(Application& self)
 {
-    if (mTestMode) {
-        RunPipeTest();
-
-        return;
-    }
-
     if (mStopProcessing) {
         return;
     }
@@ -76,14 +73,23 @@ void App::initialize(Application& self)
 
     Application::initialize(self);
 
+    // BIO* stream     = BIO_new_fp(stdout, BIO_NOCLOSE | BIO_FP_TEXT);
+    // auto categories = {OSSL_TRACE_CATEGORY_TRACE, OSSL_TRACE_CATEGORY_INIT, OSSL_TRACE_CATEGORY_TLS,
+    //     /*OSSL_TRACE_CATEGORY_TLS_CIPHER,*/
+    //     OSSL_TRACE_CATEGORY_ENGINE_TABLE, OSSL_TRACE_CATEGORY_ENGINE_REF_COUNT, OSSL_TRACE_CATEGORY_PKCS5V2,
+    //     OSSL_TRACE_CATEGORY_PKCS12_KEYGEN, OSSL_TRACE_CATEGORY_PKCS12_DECRYPT, OSSL_TRACE_CATEGORY_X509V3_POLICY,
+    //     /*OSSL_TRACE_CATEGORY_BN_CTX,*/ OSSL_TRACE_CATEGORY_CMP, OSSL_TRACE_CATEGORY_STORE,
+    //     OSSL_TRACE_CATEGORY_DECODER, OSSL_TRACE_CATEGORY_ENCODER, OSSL_TRACE_CATEGORY_REF_COUNT};
+    // for (auto cat : categories) {
+    //     OSSL_trace_set_channel(cat, stream);
+    // }
+
     LOG_INF() << "Initialize message-proxy: version = " << AOS_MESSAGE_PROXY_VERSION;
 
-    // Initialize modules
-    mIAMChannel.emplace(mIAMChannelFactory.GetChannel());
-    mIAMReverseChannel.emplace(mIAMChannel->GetReverse());
-
-    mCMChannel.emplace(mCMChannelFactory.GetChannel());
-    mCMReverseChannel.emplace(mCMChannel->GetReverse());
+    // BIO* errSSL = BIO_new_fp(stderr, BIO_NOCLOSE | BIO_FP_TEXT);
+    // OSSL_trace_set_channel(OSSL_TRACE_CATEGORY_TLS, errSSL);
+    // OSSL_trace_set_prefix(OSSL_TRACE_CATEGORY_TLS, "BEGIN TRACE[TLS]");
+    // OSSL_trace_set_suffix(OSSL_TRACE_CATEGORY_TLS, "END TRACE[TLS]");
 
     err = mCryptoProvider.Init();
     AOS_ERROR_CHECK_AND_THROW("can't initialize crypto provider", err);
@@ -96,23 +102,49 @@ void App::initialize(Application& self)
 
     mConfig = retConfig.mValue;
 
-    err = mIAMClient.Init(mConfig, mCertLoader, mCryptoProvider, mIAMChannel.value(), mProvisioning);
+    err = mIAMClient.Init(mConfig, mCertLoader, mCryptoProvider, mProvisioning);
     AOS_ERROR_CHECK_AND_THROW("can't initialize IAM client", err);
 
-    err = mCMClient.Init(mConfig, mIAMClient, mCertLoader, mCryptoProvider, mCMChannel.value(), mProvisioning);
+    err = mCMClient.Init(mConfig, mIAMClient, mCertLoader, mCryptoProvider, mProvisioning);
     AOS_ERROR_CHECK_AND_THROW("can't initialize CM client", err);
 
-    mVChanManager.emplace(mConfig);
+// mVChanManager.emplace(mConfig);
+#ifdef VCHAN
+    mTransport.Init(mConfig.mVChan);
+#else
+    mTransport.Init(30001);
+#endif
 
     if (mProvisioning) {
-        err = mCommunicationManager.Init(
-            mConfig, mVChanManager.value(), mIAMReverseChannel.value(), mCMReverseChannel.value());
+        if (err = mCommunicationManager.Init(mConfig, mTransport); !err.IsNone()) {
+            AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
+        }
+
+        if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager); !err.IsNone()) {
+            AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
+        }
     } else {
-        err = mCommunicationManager.Init(mConfig, mVChanManager.value(), mIAMReverseChannel.value(),
-            mCMReverseChannel.value(), &mIAMClient, &mCertLoader, &mCryptoProvider);
+        if (err = mCommunicationManager.Init(mConfig, mTransport, &mIAMClient, &mCertLoader, &mCryptoProvider);
+            !err.IsNone()) {
+            AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
+        }
+
+        if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager, &mIAMClient); !err.IsNone()) {
+            AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
+        }
+
+        if (err = mIAMProtectedConnection.Init(mConfig.mIAMConfig.mSecurePort, mIAMClient.GetProtectedHandler(),
+                mCommunicationManager, &mIAMClient, mConfig.mVChan.mIAMCertStorage);
+            !err.IsNone()) {
+            AOS_ERROR_CHECK_AND_THROW("can't initialize IAM protected connection", err);
+        }
     }
 
-    AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
+    if (err
+        = mIAMPublicConnection.Init(mConfig.mIAMConfig.mOpenPort, mIAMClient.GetPublicHandler(), mCommunicationManager);
+        !err.IsNone()) {
+        AOS_ERROR_CHECK_AND_THROW("can't initialize IAM public connection", err);
+    }
 
     // Notify systemd
 
@@ -130,10 +162,14 @@ void App::uninitialize()
 
     LOG_INF() << "Uninitialize message-proxy";
 
-    mIAMChannelFactory.Close();
-    mCMChannelFactory.Close();
-    mVChanManager->Close();
+    mTransport.Close();
     mCommunicationManager.Close();
+
+    mCMConnection.Close();
+    if (!mProvisioning) {
+        mIAMProtectedConnection.Close();
+    }
+    mIAMPublicConnection.Close();
 
     Application::uninitialize();
 }

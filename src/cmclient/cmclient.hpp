@@ -11,6 +11,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <memory>
+#include <queue>
 #include <thread>
 
 #include <grpcpp/security/credentials.h>
@@ -18,12 +19,11 @@
 
 #include <aos/common/cryptoutils.hpp>
 #include <aos/common/tools/error.hpp>
-#include <utils/bidirectionalchannel.hpp>
 #include <utils/channel.hpp>
 
+#include "communication/types.hpp"
 #include "config/config.hpp"
 #include "iamclient/types.hpp"
-#include "types.hpp"
 
 using SMService        = servicemanager::v4::SMService;
 using SMServiceStubPtr = std::unique_ptr<SMService::StubInterface>;
@@ -31,18 +31,8 @@ using SMServiceStubPtr = std::unique_ptr<SMService::StubInterface>;
 /**
  * CMClient class.
  */
-class CMClient {
+class CMClient : public HandlerItf {
 public:
-    /**
-     *  Destructor.
-     */
-    ~CMClient();
-
-    /**
-     *  Constructor.
-     */
-    CMClient() = default;
-
     /**
      *  Initialize CMClient.
      *
@@ -50,17 +40,41 @@ public:
      * @param certProvider certificate provider.
      * @param certLoader certificate loader.
      * @param cryptoProvider crypto provider.
-     * @param channel channel.
      * @param insecureConnection insecure connection.
      * @return aos::Error.
      */
     aos::Error Init(const Config& config, CertProviderItf& certProvider, aos::cryptoutils::CertLoaderItf& certLoader,
-        aos::crypto::x509::ProviderItf&                                 cryptoProvider,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool insecureConnection = false);
+        aos::crypto::x509::ProviderItf& cryptoProvider, bool insecureConnection = false);
+
+    /**
+     * Notify that connection is established.
+     *
+     */
+    void OnConnected() override;
+
+    /**
+     * Notify that connection is lost.
+     *
+     */
+    void OnDisconnected() override;
+
+    /**
+     * Send messages.
+     *
+     * @param messages messages.
+     * @return aos::Error.
+     */
+    aos::Error SendMessages(std::vector<uint8_t> messages) override;
+
+    /**
+     * Receive messages.
+     *
+     * @return aos::RetWithError<std::vector<uint8_t>>.
+     */
+    aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() override;
 
 private:
-    constexpr static auto cReconnectTimeout = std::chrono::seconds(10);
-    constexpr static auto cCMConnectTimeout = std::chrono::seconds(30);
+    constexpr static auto cReconnectTimeout = std::chrono::seconds(3);
 
     using StreamPtr = std::unique_ptr<grpc::ClientReaderWriterInterface<::servicemanager::v4::SMOutgoingMessages,
         servicemanager::v4::SMIncomingMessages>>;
@@ -72,6 +86,9 @@ private:
     void                                                         ProcessOutgoingSMMessages();
     aos::RetWithError<std::shared_ptr<grpc::ChannelCredentials>> CreateCredentials(
         const std::string& certStorage, bool insecureConnection);
+    void Close();
+    void CacheMessage(const servicemanager::v4::SMOutgoingMessages& message);
+    void SendCachedMessages();
 
     std::thread mCMThread;
     std::thread mHandlerOutgoingMsgsThread;
@@ -86,11 +103,15 @@ private:
     SMServiceStubPtr                          mSMStub;
     StreamPtr                                 mStream;
     std::unique_ptr<grpc::ClientContext>      mCtx;
+    std::string                               mUrl;
 
-    CertProviderItf*                                                mCertProvider {};
-    aos::cryptoutils::CertLoaderItf*                                mCertLoader {};
-    aos::crypto::x509::ProviderItf*                                 mCryptoProvider {};
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mMsgHandler {};
+    CertProviderItf*                                   mCertProvider {};
+    aos::cryptoutils::CertLoaderItf*                   mCertLoader {};
+    aos::crypto::x509::ProviderItf*                    mCryptoProvider {};
+    aos::common::utils::Channel<std::vector<uint8_t>>  mOutgoingMsgChannel;
+    aos::common::utils::Channel<std::vector<uint8_t>>  mIncomingMsgChannel;
+    bool                                               mNotifyConnected {};
+    std::queue<servicemanager::v4::SMOutgoingMessages> mMessageCache;
 };
 
 #endif

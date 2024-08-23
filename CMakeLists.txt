@@ -16,6 +16,7 @@ project("aos_messageproxy")
 option(WITH_TEST "build with test" OFF)
 option(WITH_COVERAGE "build with coverage" OFF)
 option(WITH_DOC "build with documenation" OFF)
+option(WITH_VCHAN "build with vchan" ON)
 
 message(STATUS)
 message(STATUS "${CMAKE_PROJECT_NAME} configuration:")
@@ -25,6 +26,7 @@ message(STATUS)
 message(STATUS "WITH_TEST                     = ${WITH_TEST}")
 message(STATUS "WITH_COVERAGE                 = ${WITH_COVERAGE}")
 message(STATUS "WITH_DOC                      = ${WITH_DOC}")
+message(STATUS "WITH_VCHAN                    = ${WITH_VCHAN}")
 message(STATUS)
 
 # ######################################################################################################################
@@ -36,6 +38,10 @@ set(common_flags "-fPIC -Wall -Werror -Wextra -Wpedantic")
 set(CMAKE_CXX_FLAGS "${common_flags} ${CMAKE_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${common_flags} ${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_STANDARD 17)
+
+if(WITH_VCHAN)
+    add_definitions(-DVCHAN)
+endif()
 
 # ######################################################################################################################
 # Versioning
@@ -77,6 +83,18 @@ find_package(CURL REQUIRED)
 
 # Find the libssl package
 find_package(OpenSSL REQUIRED)
+
+if(WITH_VCHAN)
+    find_package(Xenvchan REQUIRED)
+    if(XENVCHAN_FOUND)
+        message(STATUS "Xenvchan found:")
+        message(STATUS "  version: ${XENVCHAN_VERSION}")
+        message(STATUS "  libraries: ${XENVCHAN_LIBRARIES}")
+        message(STATUS "  include dirs: ${XENVCHAN_INCLUDE_DIRS}")
+    else()
+        message(FATAL_ERROR "Xenvchan not found")
+    endif()
+endif()
 
 # Poco lib
 find_package(Poco REQUIRED Foundation Net NetSSL Util)

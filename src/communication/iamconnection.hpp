@@ -8,13 +8,12 @@
 #ifndef IAMCONNECTION_HPP_
 #define IAMCONNECTION_HPP_
 
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 #include <aos/common/tools/error.hpp>
-
-#include <utils/bidirectionalchannel.hpp>
 
 #include "iamclient/types.hpp"
 #include "types.hpp"
@@ -22,7 +21,7 @@
 /**
  * IAM connection class.
  */
-class IAMConnection : public AosProtocol {
+class IAMConnection {
 public:
     /**
      * Initialize connection.
@@ -33,8 +32,8 @@ public:
      * @param channel Channel.
      * @return aos::Error.
      */
-    aos::Error Init(int port, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel);
+    aos::Error Init(int port, HandlerItf& handler, CommunicationManagerItf& comManager,
+        CertProviderItf* certProvider = nullptr, const std::string& certStorage = "");
 
     /**
      * Close connection.
@@ -43,16 +42,16 @@ public:
     void Close();
 
 private:
-    static constexpr auto cConnectionTimeout = std::chrono::seconds(5);
+    static constexpr auto cConnectionTimeout = std::chrono::seconds(3);
 
     void Run();
     void ReadHandler();
     void WriteHandler();
 
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mChannel {};
-    bool                                                            mShutdown {};
-    std::thread                                                     mConnectThread;
-    std::unique_ptr<CommChannelItf>                                 mIAMCommChannel;
+    std::atomic<bool>               mShutdown {};
+    std::thread                     mConnectThread;
+    std::unique_ptr<CommChannelItf> mIAMCommChannel;
+    HandlerItf*                     mHandler {};
 
     std::mutex              mMutex;
     std::condition_variable mCondVar;

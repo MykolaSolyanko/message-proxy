@@ -268,28 +268,21 @@ class CMClientTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        aos::InitLogs();
+        aos::InitLog();
 
         Config cfg;
-        cfg.mCMConfig.mCMServerURL = "localhost:8001";
+        cfg.mCMConfig.mCMServerURL = "localhost:8080";
 
         mSMService.emplace(cfg.mCMConfig.mCMServerURL);
 
-        mCMChannelFactory.emplace();
-        mCMChannel.emplace(mCMChannelFactory->GetChannel());
-        mCMChannelReverse.emplace(mCMChannel->GetReverse());
-
         mCMClient.emplace();
 
-        auto err = mCMClient->Init(cfg, *mCertProvider, *mCertLoader, *mCryptoProvider, mCMChannel.value(), true);
+        auto err = mCMClient->Init(cfg, *mCertProvider, *mCertLoader, *mCryptoProvider, true);
         ASSERT_EQ(err, aos::ErrorEnum::eNone);
+        mCMClient->OnConnected();
     }
 
-    void TearDown() override { mCMChannelFactory->Close(); }
-
-    std::optional<aos::common::utils::BiDirectionalChannelFactory<std::vector<uint8_t>>> mCMChannelFactory;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mCMChannel;
-    std::optional<aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>>        mCMChannelReverse;
+    void TearDown() override { mCMClient->OnDisconnected(); }
 
     std::optional<TestSMService>     mSMService;
     CertProviderItf*                 mCertProvider {};
@@ -309,7 +302,8 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     std::vector<uint8_t> data(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    // mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(std::move(data));
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_node_config_status());
@@ -329,7 +323,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_run_instances_status());
@@ -351,7 +345,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_override_env_var_status());
@@ -374,7 +368,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_update_instances_status());
@@ -396,7 +390,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_log());
@@ -415,7 +409,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_instant_monitoring());
@@ -448,7 +442,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
     data.resize(outgoingMsg.ByteSizeLong());
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_average_monitoring());
@@ -482,7 +476,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
 
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_alert());
@@ -503,7 +497,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
 
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_image_content_request());
@@ -519,7 +513,7 @@ TEST_F(CMClientTest, SendOutgoingMsg)
 
     EXPECT_TRUE(outgoingMsg.SerializeToArray(data.data(), data.size()));
 
-    mCMChannelReverse->Send(data);
+    mCMClient->SendMessages(data);
     mSMService->WaitForResponse();
 
     EXPECT_TRUE(mSMService->GetOutgoingMsg().has_clock_sync_request());
@@ -530,7 +524,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a get unit config status message
     EXPECT_TRUE(mSMService->SendGetNodeConfigStatus());
 
-    auto [msg, err] = mCMChannelReverse->Receive();
+    auto [msg, err] = mCMClient->ReceiveMessages();
     ASSERT_EQ(err, aos::ErrorEnum::eNone);
 
     servicemanager::v4::SMIncomingMessages incomingMsg;
@@ -541,7 +535,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a check unit config message
     EXPECT_TRUE(mSMService->SendCheckNodeConfig());
 
-    auto res = mCMChannelReverse->Receive();
+    auto res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
     EXPECT_TRUE(incomingMsg.has_check_node_config());
@@ -551,7 +545,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a set unit config message
     EXPECT_TRUE(mSMService->SendSetUnitConfig());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
     EXPECT_TRUE(incomingMsg.has_set_node_config());
@@ -561,7 +555,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a run instances message
     EXPECT_TRUE(mSMService->SendRunInstances());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -607,7 +601,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a ovveride env vars message
     EXPECT_TRUE(mSMService->SendOverrideEnvVars());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -623,7 +617,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a system log request message
     EXPECT_TRUE(mSMService->SendSystemLogRequest());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -637,7 +631,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send an instance log request message
     EXPECT_TRUE(mSMService->SendInstanceLogRequest());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -654,7 +648,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a instance crash log request message
     EXPECT_TRUE(mSMService->SendInstanceCrashLogRequest());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -671,7 +665,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a get average monitoring message
     EXPECT_TRUE(mSMService->SendGetAverageMonitoring());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -680,7 +674,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a connection status message
     EXPECT_TRUE(mSMService->SendConnectionStatus());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -690,7 +684,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a image content info message
     EXPECT_TRUE(mSMService->SendImageContentInfo());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -707,7 +701,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a image content message
     EXPECT_TRUE(mSMService->SendImageContent());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -721,7 +715,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a update networks message
     EXPECT_TRUE(mSMService->SendUpdateNetworks());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));
@@ -742,7 +736,7 @@ TEST_F(CMClientTest, SendIncomingMessages)
     // Send a clock sync message
     EXPECT_TRUE(mSMService->SendClockSync());
 
-    res = mCMChannelReverse->Receive();
+    res = mCMClient->ReceiveMessages();
     ASSERT_EQ(res.mError, aos::ErrorEnum::eNone);
 
     EXPECT_TRUE(incomingMsg.ParseFromArray(res.mValue.data(), static_cast<int>(res.mValue.size())));

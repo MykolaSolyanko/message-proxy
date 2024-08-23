@@ -8,23 +8,29 @@
 #ifndef VCHAN_HPP_
 #define VCHAN_HPP_
 
-#include "types.hpp"
+extern "C" {
 #include <libxenvchan.h>
+}
+
+#include <atomic>
+
+#include "config/config.hpp"
+#include "types.hpp"
 
 /**
- * @brief Virtual Channel class
+ * Virtual Channel class
  */
 class VChan : public TransportItf {
 public:
-    VChan(const std::string& path, int domain);
+    aos::Error Init(const VChanConfig& config);
 
     /**
-     * @brief Connect to the virtual channel
+     * Connect to the virtual channel
      */
     aos::Error Connect() override;
 
     /**
-     * @brief Read message from the virtual channel
+     * Read message from the virtual channel
      *
      * @param message Message
      * @return aos::Error
@@ -32,7 +38,7 @@ public:
     aos::Error Read(std::vector<uint8_t>& message) override;
 
     /**
-     * @brief Write message to the virtual channel
+     * Write message to the virtual channel
      *
      * @param message Message
      * @return aos::Error
@@ -40,16 +46,19 @@ public:
     aos::Error Write(std::vector<uint8_t> message) override;
 
     /**
-     * @brief Close the virtual channel
+     * Close the virtual channel
      *
      * @return aos::Error
      */
     aos::Error Close() override;
 
 private:
-    std::string         mPath;
-    int                 mDomain;
-    struct libxenvchan* mVChan {};
+    aos::Error ConnectToVChan(struct libxenvchan*& vchan, const std::string& path, int domain);
+
+    struct libxenvchan* mVChanRead {};
+    struct libxenvchan* mVChanWrite {};
+    VChanConfig         mConfig;
+    std::atomic<bool>   mShutdown {false};
 };
 
 #endif // VCHAN_HPP_
