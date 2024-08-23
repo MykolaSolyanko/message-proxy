@@ -50,7 +50,8 @@ static VChanConfig ParseVChanConfig(const aos::common::utils::CaseInsensitiveObj
         object.GetValue<int>("Domain"),
         object.GetValue<std::string>("XSRXPath"),
         object.GetValue<std::string>("XSTXPath"),
-        object.GetValue<std::string>("CertStorage"),
+        object.GetValue<std::string>("IAMCertStorage"),
+        object.GetValue<std::string>("SMCertStorage"),
     };
 }
 
@@ -60,7 +61,8 @@ static IAMConfig ParseIAMConfig(const aos::common::utils::CaseInsensitiveObjectW
         object.GetValue<std::string>("IAMPublicServerURL"),
         object.GetValue<std::string>("IAMProtectedServerURL"),
         object.GetValue<std::string>("CertStorage"),
-        object.GetValue<int>("Port"),
+        object.GetValue<int>("OpenPort"),
+        object.GetValue<int>("SecurePort"),
     };
 }
 

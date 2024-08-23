@@ -19,9 +19,18 @@ aos::Error Socket::Connect()
 {
     LOG_DBG() << "Starting TCP server";
 
+    Close();
+
     mServerFd = socket(AF_INET, SOCK_STREAM, 0);
     if (mServerFd == -1) {
         LOG_ERR() << "Failed to create socket: " << strerror(errno);
+        return aos::Error {errno};
+    }
+
+    int opt = 1;
+    if (setsockopt(mServerFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        LOG_ERR() << "setsockopt(SO_REUSEADDR) failed: " << strerror(errno);
+        Close();
         return aos::Error {errno};
     }
 

@@ -14,6 +14,7 @@
 #include "logger/logmodule.hpp"
 
 #include "cmconnection.hpp"
+#include "communication/utils.hpp"
 
 /***********************************************************************************************************************
  * Public
@@ -24,16 +25,21 @@ CMConnection::CMConnection()
 {
 }
 
-aos::Error CMConnection::Init(const Config& cfg, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel)
+aos::Error CMConnection::Init(
+    const Config& cfg, HandlerItf& handler, CommunicationManagerItf& comManager, CertProviderItf* certProvider)
 {
     LOG_DBG() << "Init CMConnection";
 
+    mHandler = &handler;
+
     try {
-        mChannel           = &channel;
-        mCMCommOpenChannel = comManager.CreateChannel(cfg.mCMConfig.mOpenPort, nullptr);
+        mCMCommOpenChannel = comManager.CreateChannel(cfg.mCMConfig.mOpenPort);
         if (certProvider != nullptr) {
-            mCMCommSecureChannel = comManager.CreateChannel(cfg.mCMConfig.mSecurePort, certProvider);
+            LOG_DBG() << "Create CM secure channel port=" << cfg.mCMConfig.mSecurePort
+                      << " certStorage=" << cfg.mVChan.mSMCertStorage.c_str();
+
+            mCMCommSecureChannel
+                = comManager.CreateChannel(cfg.mCMConfig.mSecurePort, certProvider, cfg.mVChan.mSMCertStorage);
             mDownloader.emplace(cfg.mDownload.mDownloadDir);
             mImageUnpacker.emplace(cfg.mImageStoreDir);
         }
@@ -42,8 +48,7 @@ aos::Error CMConnection::Init(const Config& cfg, CertProviderItf* certProvider, 
     }
 
     StartTask([this] { RunOpenChannel(); });
-    // StartTask([this] { RunSecureChannel(); });
-    // StartTask([this] { RunFilterMessage(); });
+    StartTask([this] { RunSecureChannel(); });
 
     return aos::ErrorEnum::eNone;
 }
@@ -59,16 +64,20 @@ void CMConnection::Close()
         mCondVar.notify_all();
     }
 
-    mOpenMsgChannel.Close();
+    mHandler->OnDisconnected();
+
+    // mOpenMsgChannel.Close();
     mCMCommOpenChannel->Close();
 
     if (mCMCommSecureChannel != nullptr) {
-        mSecureMsgChannel.Close();
+        // mSecureMsgChannel.Close();
         mCMCommSecureChannel->Close();
     }
 
     mTaskManager.cancelAll();
     mTaskManager.joinAll();
+
+    LOG_DBG() << "Close CMConnection finished";
 }
 
 /***********************************************************************************************************************
@@ -93,6 +102,8 @@ void CMConnection::RunSecureChannel()
 
             continue;
         }
+
+        mHandler->OnConnected();
 
         LOG_DBG() << "Secure CM channel connected";
 
@@ -121,57 +132,57 @@ void CMConnection::RunOpenChannel()
             continue;
         }
 
-        auto readFuture  = StartTaskWithWait([this]() { ReadOpenMsgHandler(); });
-        auto writeFuture = StartTaskWithWait([this]() { WriteOpenMsgHandler(); });
+        auto readFuture = StartTaskWithWait([this]() { ReadOpenMsgHandler(); });
+        // auto writeFuture = StartTaskWithWait([this]() { WriteOpenMsgHandler(); });
 
         readFuture.wait();
-        writeFuture.wait();
+        // writeFuture.wait();
     }
 
     LOG_DBG() << "Open channel stopped";
 }
 
-void CMConnection::RunFilterMessage()
-{
-    LOG_DBG() << "Run filter message";
+// void CMConnection::RunFilterMessage()
+// {
+//     LOG_DBG() << "Run filter message";
 
-    while (!mShutdown) {
-        auto message = mChannel->Receive();
-        if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive message error=" << message.mError;
+//     while (!mShutdown) {
+//         auto message = mChannel->Receive();
+//         if (!message.mError.IsNone()) {
+//             LOG_ERR() << "Failed to receive message error=" << message.mError;
 
-            return;
-        }
+//             return;
+//         }
 
-        if (IsPublicMessage(message.mValue)) {
-            LOG_DBG() << "Public message received";
+//         if (IsPublicMessage(message.mValue)) {
+//             LOG_DBG() << "Public message received";
 
-            if (auto err = mOpenMsgChannel.Send(message.mValue); !err.IsNone()) {
-                LOG_ERR() << "Failed to send message error=" << err;
+//             if (auto err = mOpenMsgChannel.Send(message.mValue); !err.IsNone()) {
+//                 LOG_ERR() << "Failed to send message error=" << err;
 
-                return;
-            }
+//                 return;
+//             }
 
-            continue;
-        }
+//             continue;
+//         }
 
-        LOG_DBG() << "Secure message received";
+//         LOG_DBG() << "Secure message received";
 
-        if (mCMCommSecureChannel != nullptr) {
-            if (auto err = mSecureMsgChannel.Send(message.mValue); !err.IsNone()) {
-                LOG_ERR() << "Failed to send message error=" << err;
+//         if (mCMCommSecureChannel != nullptr) {
+//             if (auto err = mSecureMsgChannel.Send(message.mValue); !err.IsNone()) {
+//                 LOG_ERR() << "Failed to send message error=" << err;
 
-                return;
-            }
+//                 return;
+//             }
 
-            continue;
-        }
+//             continue;
+//         }
 
-        LOG_ERR() << "Secure channel is not initialized";
-    }
+//         LOG_ERR() << "Secure channel is not initialized";
+//     }
 
-    LOG_DBG() << "Filter message stopped";
-}
+//     LOG_DBG() << "Filter message stopped";
+// }
 
 bool CMConnection::IsPublicMessage(const std::vector<uint8_t>& message)
 {
@@ -216,7 +227,7 @@ void CMConnection::ReadSecureMsgHandler()
             continue;
         }
 
-        if (auto err = mChannel->Send(std::move(message)); !err.IsNone()) {
+        if (auto err = mHandler->SendMessages(std::move(message)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message error=" << err;
 
             return;
@@ -375,7 +386,7 @@ void CMConnection::ReadOpenMsgHandler()
             continue;
         }
 
-        if (auto err = mChannel->Send(message); !err.IsNone()) {
+        if (auto err = mHandler->SendMessages(std::move(message)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message error=" << err;
 
             return;
@@ -410,9 +421,16 @@ void CMConnection::WriteSecureMsgHandler()
     LOG_DBG() << "Write secure message handler";
 
     while (!mShutdown) {
-        auto message = mSecureMsgChannel.Receive();
+        // auto message = mSecureMsgChannel.Receive();
+        // if (!message.mError.IsNone()) {
+        //     LOG_ERR() << "Failed to receive secure message error=" << message.mError;
+
+        //     return;
+        // }
+
+        auto message = mHandler->ReceiveMessages();
         if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive secure message error=" << message.mError;
+            LOG_ERR() << "Failed to receive message error=" << message.mError;
 
             return;
         }
@@ -425,25 +443,25 @@ void CMConnection::WriteSecureMsgHandler()
     }
 }
 
-void CMConnection::WriteOpenMsgHandler()
-{
-    LOG_DBG() << "Write open message handler";
+// void CMConnection::WriteOpenMsgHandler()
+// {
+//     LOG_DBG() << "Write open message handler";
 
-    while (!mShutdown) {
-        auto message = mOpenMsgChannel.Receive();
-        if (!message.mError.IsNone()) {
-            LOG_ERR() << "Failed to receive open message error=" << message.mError;
+//     while (!mShutdown) {
+//         auto message = mOpenMsgChannel.Receive();
+//         if (!message.mError.IsNone()) {
+//             LOG_ERR() << "Failed to receive open message error=" << message.mError;
 
-            return;
-        }
+//             return;
+//         }
 
-        if (auto err = SendMessage(std::move(message.mValue), mCMCommOpenChannel); !err.IsNone()) {
-            LOG_ERR() << "Failed to write open message error=" << err;
+//         if (auto err = SendMessage(std::move(message.mValue), mCMCommOpenChannel); !err.IsNone()) {
+//             LOG_ERR() << "Failed to write open message error=" << err;
 
-            return;
-        }
-    }
-}
+//             return;
+//         }
+//     }
+// }
 
 aos::Error CMConnection::SendMessage(std::vector<uint8_t> message, std::unique_ptr<CommChannelItf>& channel)
 {

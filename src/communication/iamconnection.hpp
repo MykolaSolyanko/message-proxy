@@ -22,7 +22,7 @@
 /**
  * IAM connection class.
  */
-class IAMConnection : public AosProtocol {
+class IAMConnection {
 public:
     /**
      * Initialize connection.
@@ -33,8 +33,8 @@ public:
      * @param channel Channel.
      * @return aos::Error.
      */
-    aos::Error Init(int port, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel);
+    aos::Error Init(int port, HandlerItf& handler, CommunicationManagerItf& comManager,
+        CertProviderItf* certProvider = nullptr, const std::string& certStorage = "");
 
     /**
      * Close connection.
@@ -49,10 +49,11 @@ private:
     void ReadHandler();
     void WriteHandler();
 
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mChannel {};
-    bool                                                            mShutdown {};
-    std::thread                                                     mConnectThread;
-    std::unique_ptr<CommChannelItf>                                 mIAMCommChannel;
+    // aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mChannel {};
+    bool                            mShutdown {};
+    std::thread                     mConnectThread;
+    std::unique_ptr<CommChannelItf> mIAMCommChannel;
+    HandlerItf*                     mHandler;
 
     std::mutex              mMutex;
     std::condition_variable mCondVar;

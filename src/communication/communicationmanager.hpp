@@ -41,8 +41,8 @@ public:
      * @return aos::Error
      */
     aos::Error Init(const Config& cfg, TransportItf& transport,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& iamChannel,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& cmChannel,
+        /*         aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& iamChannel,
+                aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& cmChannel, */
         CertProviderItf* certProvider = nullptr, aos::cryptoutils::CertLoaderItf* certLoader = nullptr,
         aos::crypto::x509::ProviderItf* cryptoProvider = nullptr);
 
@@ -53,7 +53,8 @@ public:
      * @param certProvider Certificate provider
      * @return std::unique_ptr<CommChannelItf>
      */
-    std::unique_ptr<CommChannelItf> CreateChannel(int port, CertProviderItf* certProvider = nullptr) override;
+    std::unique_ptr<CommChannelItf> CreateChannel(
+        int port, CertProviderItf* certProvider, const std::string& certStorage) override;
 
     /**
      * Connect to the communication manager.
@@ -89,13 +90,13 @@ private:
     void       Run();
     aos::Error ReadHandler();
 
-    TransportItf*                                        mTransport {};
-    CertProviderItf*                                     mCertProvider {};
-    aos::cryptoutils::CertLoaderItf*                     mCertLoader;
-    aos::crypto::x509::ProviderItf*                      mCryptoProvider;
-    const Config*                                        mCfg;
-    IAMConnection                                        mIAMConnection;
-    CMConnection                                         mCMConnection;
+    TransportItf*                    mTransport {};
+    CertProviderItf*                 mCertProvider {};
+    aos::cryptoutils::CertLoaderItf* mCertLoader;
+    aos::crypto::x509::ProviderItf*  mCryptoProvider;
+    const Config*                    mCfg;
+    // IAMConnection                                        mIAMConnection;
+    // CMConnection                                         mCMConnection;
     std::map<int, std::unique_ptr<CommunicationChannel>> mChannels;
     std::thread                                          mThread;
     std::atomic<bool>                                    mShutdown {};

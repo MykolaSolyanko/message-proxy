@@ -14,39 +14,82 @@
  * Public
  **********************************************************************************************************************/
 
-aos::Error PublicNodeClient::Init(const IAMConfig& cfg, CertProviderItf& certProvider,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool provisioningMode)
+aos::Error PublicNodeClient::Init(const IAMConfig& cfg, CertProviderItf& certProvider, bool publicServer)
 {
-    LOG_INF() << "Initializing PublicNodeClient: provisioningMode=" << provisioningMode;
+    LOG_INF() << "Initializing PublicNodeClient: publicServer=" << publicServer;
 
-    mMsgHandler = &channel;
-
-    if (auto err = CreateCredentials(cfg.mCertStorage, certProvider, provisioningMode); !err.IsNone()) {
+    if (auto err = CreateCredentials(cfg.mCertStorage, certProvider, publicServer); !err.IsNone()) {
         return err;
     }
 
-    std::string url;
-    if (provisioningMode) {
-        url = cfg.mIAMPublicServerURL;
+    if (publicServer) {
+        mUrl = cfg.mIAMPublicServerURL;
     } else {
-        url = cfg.mIAMProtectedServerURL;
+        mUrl = cfg.mIAMProtectedServerURL;
     }
 
-    mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, url);
+    mPublicServer = publicServer;
 
-    mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
+    // mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, url);
+
+    // mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
 
     return aos::ErrorEnum::eNone;
 }
 
 PublicNodeClient::~PublicNodeClient()
 {
+    // Close();
+}
+
+aos::Error PublicNodeClient::SendMessages(std::vector<uint8_t> messages)
+{
+    LOG_DBG() << "Sending messages";
+
+    return mOutgoingMsgChannel.Send(std::move(messages));
+}
+
+aos::RetWithError<std::vector<uint8_t>> PublicNodeClient::ReceiveMessages()
+{
+    LOG_DBG() << "Receiving messages";
+
+    return mIncomingMsgChannel.Receive();
+}
+
+void PublicNodeClient::OnConnected()
+{
+    std::lock_guard<std::mutex> lock {mMutex};
+
+    if (!mNotifyConnected) {
+        mNotifyConnected = true;
+
+        mConnectionThread          = std::thread(&PublicNodeClient::ConnectionLoop, this, mUrl);
+        mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
+    }
+}
+
+void PublicNodeClient::OnDisconnected()
+{
+    Close();
+}
+
+/***********************************************************************************************************************
+ * Private
+ **********************************************************************************************************************/
+
+void PublicNodeClient::Close()
+{
     LOG_INF() << "Destroying PublicNodeClient";
 
     {
         std::unique_lock lock {mMutex};
 
-        mShutdown = true;
+        if (mShutdown || !mNotifyConnected) {
+            return;
+        }
+
+        mShutdown        = true;
+        mNotifyConnected = false;
 
         if (mRegisterNodeCtx) {
             mRegisterNodeCtx->TryCancel();
@@ -54,6 +97,9 @@ PublicNodeClient::~PublicNodeClient()
 
         mCV.notify_all();
     }
+
+    mOutgoingMsgChannel.Close();
+    mIncomingMsgChannel.Close();
 
     if (mConnectionThread.joinable()) {
         mConnectionThread.join();
@@ -64,14 +110,10 @@ PublicNodeClient::~PublicNodeClient()
     }
 }
 
-/***********************************************************************************************************************
- * Private
- **********************************************************************************************************************/
-
 aos::Error PublicNodeClient::CreateCredentials(
-    const std::string& certStorage, CertProviderItf& certProvider, bool provisioningMode)
+    const std::string& certStorage, CertProviderItf& certProvider, bool publicServer)
 {
-    if (provisioningMode) {
+    if (publicServer) {
         mCredentialList.push_back(grpc::InsecureChannelCredentials());
 
         if (auto TLSCredentials = certProvider.GetTLSCredentials(); TLSCredentials) {
@@ -97,9 +139,7 @@ void PublicNodeClient::ConnectionLoop(const std::string& url) noexcept
 
     while (true) {
         try {
-            if (RegisterNode(url)) {
-                HandleIncomingMessages();
-            }
+            RegisterNode(url);
         } catch (const std::exception& e) {
             LOG_ERR() << "PublicNodeClient connection error: " << e.what();
         }
@@ -120,40 +160,44 @@ bool PublicNodeClient::RegisterNode(const std::string& url)
     LOG_DBG() << "Registering node: url=" << url.c_str();
 
     for (const auto& credentials : mCredentialList) {
-        std::unique_lock lock {mMutex};
+        {
+            std::unique_lock lock {mMutex};
 
-        if (mShutdown) {
-            return false;
+            if (mShutdown) {
+                return false;
+            }
+
+            auto channel = grpc::CreateCustomChannel(url, credentials, grpc::ChannelArguments());
+            if (!channel) {
+                LOG_ERR() << "Failed to create channel";
+
+                continue;
+            }
+
+            mPublicNodeServiceStub = PublicNodeService::NewStub(channel);
+            if (!mPublicNodeServiceStub) {
+                LOG_ERR() << "Failed to create stub";
+
+                continue;
+            }
+
+            mRegisterNodeCtx = std::make_unique<grpc::ClientContext>();
+            mStream          = mPublicNodeServiceStub->RegisterNode(mRegisterNodeCtx.get());
+            if (!mStream) {
+                LOG_ERR() << "Failed to create stream";
+
+                continue;
+            }
+
+            mConnected = true;
+            mCV.notify_all();
+
+            LOG_DBG() << "Connection established";
         }
 
-        auto channel = grpc::CreateCustomChannel(url, credentials, grpc::ChannelArguments());
-        if (!channel) {
-            LOG_ERR() << "Failed to create channel";
+        LOG_DBG() << "Try handling incoming messages url=" << url.c_str();
 
-            continue;
-        }
-
-        mPublicNodeServiceStub = PublicNodeService::NewStub(channel);
-        if (!mPublicNodeServiceStub) {
-            LOG_ERR() << "Failed to create stub";
-
-            continue;
-        }
-
-        mRegisterNodeCtx = std::make_unique<grpc::ClientContext>();
-        mStream          = mPublicNodeServiceStub->RegisterNode(mRegisterNodeCtx.get());
-        if (!mStream) {
-            LOG_ERR() << "Failed to create stream";
-
-            continue;
-        }
-
-        mConnected = true;
-        mCV.notify_all();
-
-        LOG_DBG() << "Connection established";
-
-        return true;
+        HandleIncomingMessages();
     }
 
     LOG_ERR() << "Failed to register node";
@@ -178,7 +222,7 @@ void PublicNodeClient::HandleIncomingMessages()
             continue;
         }
 
-        if (auto err = mMsgHandler->Send(std::move(message)); !err.IsNone()) {
+        if (auto err = mIncomingMsgChannel.Send(std::move(message)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message: error=" << err.Message();
 
             return;
@@ -191,7 +235,7 @@ void PublicNodeClient::ProcessOutgoingIAMMessages()
     LOG_DBG() << "Processing outgoing IAM messages";
 
     while (!mShutdown) {
-        auto [msg, err] = mMsgHandler->Receive();
+        auto [msg, err] = mOutgoingMsgChannel.Receive();
         if (!err.IsNone()) {
             LOG_ERR() << "Failed to receive message: error=" << err;
 

@@ -38,8 +38,7 @@ public:
      * @return aos::Error.
      */
     aos::Error Init(const Config& cfg, aos::cryptoutils::CertLoaderItf& certLoader,
-        aos::crypto::x509::ProviderItf&                                 cryptoProvider,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool provisioningMode = false,
+        aos::crypto::x509::ProviderItf& cryptoProvider, bool provisioningMode = false,
         MTLSCredentialsFunc mtlsCredentialsFunc = aos::common::utils::GetMTLSClientCredentials);
 
     /**
@@ -66,9 +65,14 @@ public:
      */
     aos::Error GetCertificate(const std::string& certType, aos::iam::certhandler::CertInfo& certInfo) override;
 
+    HandlerItf& GetPublicHandler() { return mPublicNodeClient.value(); }
+
+    HandlerItf& GetProtectedHandler() { return mProtectedNodeClient.value(); }
+
 private:
     std::optional<PublicServiceHandler> mPublicServiceHandler;
     std::optional<PublicNodeClient>     mPublicNodeClient;
+    std::optional<PublicNodeClient>     mProtectedNodeClient;
 };
 
 #endif

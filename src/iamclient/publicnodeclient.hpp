@@ -22,6 +22,7 @@
 #include <aos/common/tools/error.hpp>
 #include <utils/bidirectionalchannel.hpp>
 
+#include "communication/types.hpp"
 #include "config/config.hpp"
 #include "types.hpp"
 #include "utils/time.hpp"
@@ -29,7 +30,7 @@
 /**
  * Public node client interface.
  */
-class PublicNodeClient {
+class PublicNodeClient : public HandlerItf {
 public:
     ~PublicNodeClient();
 
@@ -38,12 +39,16 @@ public:
      *
      * @param cfg Configuration.
      * @param certProvider Certificate provider.
-     * @param channel Channel.
-     * @param provisioningMode Provisioning mode.
+     * @param publicServer Public server.
      * @return Error error code.
      */
-    aos::Error Init(const IAMConfig& cfg, CertProviderItf& certProvider,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool provisioningMode);
+    aos::Error Init(const IAMConfig& cfg, CertProviderItf& certProvider, bool publicServer);
+
+    void OnConnected() override;
+    void OnDisconnected() override;
+
+    aos::Error                              SendMessages(std::vector<uint8_t> messages) override;
+    aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() override;
 
 private:
     using StreamPtr = std::unique_ptr<
@@ -54,12 +59,13 @@ private:
 
     static constexpr auto cReconnectInterval = std::chrono::seconds(10);
 
-    aos::Error CreateCredentials(const std::string& certStorage, CertProviderItf& certProvider, bool provisioningMode);
+    aos::Error CreateCredentials(const std::string& certStorage, CertProviderItf& certProvider, bool publicServer);
     void       ConnectionLoop(const std::string& url) noexcept;
     void       HandleIncomingMessages();
     bool       RegisterNode(const std::string& url);
     void       InitializeHandlers();
     void       ProcessOutgoingIAMMessages();
+    void       Close();
 
     std::vector<std::shared_ptr<grpc::ChannelCredentials>> mCredentialList;
 
@@ -73,8 +79,15 @@ private:
     bool                    mShutdown {};
     bool                    mConnected {};
     std::mutex              mMutex;
+    std::string             mUrl;
+    bool                    mPublicServer;
 
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mMsgHandler {};
+    aos::common::utils::Channel<std::vector<uint8_t>> mOutgoingMsgChannel;
+    aos::common::utils::Channel<std::vector<uint8_t>> mIncomingMsgChannel;
+
+    bool mNotifyConnected {};
+
+    // aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mMsgHandler {};
 };
 
 #endif // PUBLICNODECLIENT_HPP_

@@ -1,5 +1,6 @@
 #include <thread>
 
+#include "communication/utils.hpp"
 #include "communicationchannel.hpp"
 #include "logger/logmodule.hpp"
 

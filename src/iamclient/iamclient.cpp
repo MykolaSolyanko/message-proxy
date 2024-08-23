@@ -13,14 +13,13 @@
  **********************************************************************************************************************/
 
 aos::Error IAMClient::Init(const Config& cfg, aos::cryptoutils::CertLoaderItf& certLoader,
-    aos::crypto::x509::ProviderItf&                                 cryptoProvider,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool provisioningMode,
-    MTLSCredentialsFunc mtlsCredentialsFunc)
+    aos::crypto::x509::ProviderItf& cryptoProvider, bool provisioningMode, MTLSCredentialsFunc mtlsCredentialsFunc)
 {
     LOG_INF() << "Initializing IAM client";
 
     mPublicServiceHandler.emplace();
     mPublicNodeClient.emplace();
+    mProtectedNodeClient.emplace();
 
     if (auto err = mPublicServiceHandler->Init(
             cfg, certLoader, cryptoProvider, provisioningMode, std::move(mtlsCredentialsFunc));
@@ -28,7 +27,18 @@ aos::Error IAMClient::Init(const Config& cfg, aos::cryptoutils::CertLoaderItf& c
         return AOS_ERROR_WRAP(err);
     }
 
-    return mPublicNodeClient->Init(cfg.mIAMConfig, *this, channel, provisioningMode);
+    // mPublicNodeClient->Init(cfg.mIAMConfig, *this, provisioningMode);
+    if (auto err = mPublicNodeClient->Init(cfg.mIAMConfig, *this, true); !err.IsNone()) {
+        return AOS_ERROR_WRAP(err);
+    }
+
+    if (!provisioningMode) {
+        if (auto err = mProtectedNodeClient->Init(cfg.mIAMConfig, *this, false); !err.IsNone()) {
+            return AOS_ERROR_WRAP(err);
+        }
+    }
+
+    return aos::ErrorEnum::eNone;
 }
 
 aos::RetWithError<std::shared_ptr<grpc::ChannelCredentials>> IAMClient::GetMTLSConfig(const std::string& certStorage)

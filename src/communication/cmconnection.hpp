@@ -34,7 +34,7 @@
 /**
  * CM connection class.
  */
-class CMConnection : public AosProtocol {
+class CMConnection {
 public:
     /**
      * Constructor.
@@ -50,8 +50,8 @@ public:
      * @param channel Channel.
      * @return aos::Error.
      */
-    aos::Error Init(const Config& cfg, CertProviderItf* certProvider, CommunicationManagerItf& comManager,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel);
+    aos::Error Init(const Config& cfg, HandlerItf& handler, CommunicationManagerItf& comManager,
+        CertProviderItf* certProvider = nullptr);
 
     /**
      * Close connection.
@@ -100,13 +100,13 @@ private:
 
     void StartTask(std::function<void()> func) { mTaskManager.start(new Task(std::move(func))); }
 
-    void                           RunSecureChannel();
-    void                           RunOpenChannel();
-    void                           RunFilterMessage();
-    void                           ReadSecureMsgHandler();
-    void                           ReadOpenMsgHandler();
-    void                           WriteSecureMsgHandler();
-    void                           WriteOpenMsgHandler();
+    void RunSecureChannel();
+    void RunOpenChannel();
+    // void RunFilterMessage();
+    void ReadSecureMsgHandler();
+    void ReadOpenMsgHandler();
+    void WriteSecureMsgHandler();
+    // void                           WriteOpenMsgHandler();
     bool                           IsPublicMessage(const std::vector<uint8_t>& message);
     aos::Error                     SendSMClockSync();
     aos::Error                     Download(const std::string& url, uint64_t requestID, const std::string& contentType);
@@ -120,11 +120,11 @@ private:
     aos::Error                              SendMessage(std::vector<uint8_t> message, CommChannelItf* channel);
     aos::RetWithError<std::vector<uint8_t>> ReadMessage(CommChannelItf* channel);
 
-    std::unique_ptr<CommChannelItf>                                 mCMCommOpenChannel;
-    std::unique_ptr<CommChannelItf>                                 mCMCommSecureChannel;
-    aos::common::utils::Channel<std::vector<uint8_t>>               mSecureMsgChannel;
-    aos::common::utils::Channel<std::vector<uint8_t>>               mOpenMsgChannel;
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mChannel {};
+    std::unique_ptr<CommChannelItf> mCMCommOpenChannel;
+    std::unique_ptr<CommChannelItf> mCMCommSecureChannel;
+    // aos::common::utils::Channel<std::vector<uint8_t>> mSecureMsgChannel;
+    // aos::common::utils::Channel<std::vector<uint8_t>> mOpenMsgChannel;
+    HandlerItf* mHandler;
 
     Poco::TaskManager mTaskManager;
 

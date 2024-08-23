@@ -21,6 +21,7 @@
 #include <utils/bidirectionalchannel.hpp>
 #include <utils/channel.hpp>
 
+#include "communication/types.hpp"
 #include "config/config.hpp"
 #include "iamclient/types.hpp"
 #include "types.hpp"
@@ -31,7 +32,7 @@ using SMServiceStubPtr = std::unique_ptr<SMService::StubInterface>;
 /**
  * CMClient class.
  */
-class CMClient {
+class CMClient : public HandlerItf {
 public:
     /**
      *  Destructor.
@@ -55,8 +56,13 @@ public:
      * @return aos::Error.
      */
     aos::Error Init(const Config& config, CertProviderItf& certProvider, aos::cryptoutils::CertLoaderItf& certLoader,
-        aos::crypto::x509::ProviderItf&                                 cryptoProvider,
-        aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool insecureConnection = false);
+        aos::crypto::x509::ProviderItf& cryptoProvider, bool insecureConnection = false);
+
+    void OnConnected() override;
+    void OnDisconnected() override;
+
+    aos::Error                              SendMessages(std::vector<uint8_t> messages) override;
+    aos::RetWithError<std::vector<uint8_t>> ReceiveMessages() override;
 
 private:
     constexpr static auto cReconnectTimeout = std::chrono::seconds(10);
@@ -72,6 +78,7 @@ private:
     void                                                         ProcessOutgoingSMMessages();
     aos::RetWithError<std::shared_ptr<grpc::ChannelCredentials>> CreateCredentials(
         const std::string& certStorage, bool insecureConnection);
+    void Close();
 
     std::thread mCMThread;
     std::thread mHandlerOutgoingMsgsThread;
@@ -86,11 +93,14 @@ private:
     SMServiceStubPtr                          mSMStub;
     StreamPtr                                 mStream;
     std::unique_ptr<grpc::ClientContext>      mCtx;
+    std::string                               mUrl;
 
-    CertProviderItf*                                                mCertProvider {};
-    aos::cryptoutils::CertLoaderItf*                                mCertLoader {};
-    aos::crypto::x509::ProviderItf*                                 mCryptoProvider {};
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>* mMsgHandler {};
+    CertProviderItf*                                  mCertProvider {};
+    aos::cryptoutils::CertLoaderItf*                  mCertLoader {};
+    aos::crypto::x509::ProviderItf*                   mCryptoProvider {};
+    aos::common::utils::Channel<std::vector<uint8_t>> mOutgoingMsgChannel;
+    aos::common::utils::Channel<std::vector<uint8_t>> mIncomingMsgChannel;
+    bool                                              mNotifyConnected {};
 };
 
 #endif

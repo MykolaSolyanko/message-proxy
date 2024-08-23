@@ -1,5 +1,6 @@
 #include <openssl/sha.h>
 
+#include "communication/utils.hpp"
 #include "communicationmanager.hpp"
 #include "logger/logmodule.hpp"
 #include "openchannel.hpp"
@@ -29,8 +30,8 @@ static void CalculateChecksum(const std::vector<uint8_t>& data, uint8_t* checksu
  **********************************************************************************************************************/
 
 aos::Error CommunicationManager::Init(const Config& cfg, TransportItf& transport,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>&                  iamChannel,
-    [[maybe_unused]] aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& cmChannel,
+    /*     aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>&                  iamChannel,
+        [[maybe_unused]] aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& cmChannel, */
     CertProviderItf* certProvider, aos::cryptoutils::CertLoaderItf* certLoader,
     aos::crypto::x509::ProviderItf* cryptoProvider)
 {
@@ -42,21 +43,22 @@ aos::Error CommunicationManager::Init(const Config& cfg, TransportItf& transport
     mCryptoProvider = cryptoProvider;
     mCfg            = &cfg;
 
-    if (auto err = mIAMConnection.Init(cfg.mIAMConfig.mPort, certProvider, *this, iamChannel);
-        err != aos::ErrorEnum::eNone) {
-        return err;
-    }
+    // if (auto err = mIAMConnection.Init(cfg.mIAMConfig.mPort, certProvider, *this, iamChannel);
+    //     err != aos::ErrorEnum::eNone) {
+    //     return err;
+    // }
 
-    if (auto err = mCMConnection.Init(cfg, certProvider, *this, cmChannel); !err.IsNone()) {
-        return err;
-    }
+    // if (auto err = mCMConnection.Init(cfg, certProvider, *this, cmChannel); !err.IsNone()) {
+    //     return err;
+    // }
 
     mThread = std::thread(&CommunicationManager::Run, this);
 
     return aos::ErrorEnum::eNone;
 }
 
-std::unique_ptr<CommChannelItf> CommunicationManager::CreateChannel(int port, CertProviderItf* certProvider)
+std::unique_ptr<CommChannelItf> CommunicationManager::CreateChannel(
+    int port, CertProviderItf* certProvider, const std::string& certStorage)
 {
     std::unique_ptr<CommunicationChannel> chan = std::make_unique<CommunicationChannel>(port, this);
 
@@ -70,10 +72,10 @@ std::unique_ptr<CommChannelItf> CommunicationManager::CreateChannel(int port, Ce
         return openchannel;
     }
 
-    LOG_DBG() << "Create secure channel";
+    LOG_DBG() << "Create secure channel for port=" << port << " certStorage=" << certStorage.c_str();
 
-    auto securechannel
-        = std::make_unique<SecureChannel>(*mCfg, *chan, *certProvider, *mCertLoader, *mCryptoProvider, port);
+    auto securechannel = std::make_unique<SecureChannel>(
+        *mCfg, *chan, *certProvider, *mCertLoader, *mCryptoProvider, port, certStorage);
 
     mChannels[port] = std::move(chan);
 
@@ -141,8 +143,8 @@ aos::Error CommunicationManager::Close()
         mCondVar.notify_all();
     }
 
-    mIAMConnection.Close();
-    mCMConnection.Close();
+    // mIAMConnection.Close();
+    // mCMConnection.Close();
 
     if (mThread.joinable()) {
         mThread.join();

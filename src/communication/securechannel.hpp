@@ -34,7 +34,8 @@ public:
      * @param port Port.
      */
     SecureChannel(const Config& cfg, CommChannelItf& channel, CertProviderItf& certProvider,
-        aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port);
+        aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port,
+        const std::string& certStorage);
 
     /**
      * Destructor.
@@ -88,6 +89,7 @@ private:
     aos::crypto::x509::ProviderItf*  mCryptoProvider {};
     const Config*                    mCfg {};
     int                              mPort {};
+    std::string                      mCertStorage {};
     SSL_CTX*                         mCtx {};
     SSL*                             mSsl {};
 };

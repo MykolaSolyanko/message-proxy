@@ -12,6 +12,7 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/trace.h>
 
 #include <utils/cryptohelper.hpp>
 #include <utils/pkcs11helper.hpp>
@@ -24,15 +25,19 @@
  **********************************************************************************************************************/
 
 SecureChannel::SecureChannel(const Config& cfg, CommChannelItf& channel, CertProviderItf& certProvider,
-    aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port)
+    aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider, int port,
+    const std::string& certStorage)
     : mChannel(&channel)
     , mCertProvider(&certProvider)
     , mCertLoader(&certLoader)
     , mCryptoProvider(&cryptoProvider)
     , mCfg(&cfg)
     , mPort(port)
+    , mCertStorage(certStorage)
 {
+
     InitOpenssl();
+
     const SSL_METHOD* method = TLS_server_method();
     mCtx                     = CreateSSLContext(method);
 
@@ -168,7 +173,7 @@ aos::Error SecureChannel::ConfigureSSLContext(SSL_CTX* ctx, ENGINE* eng)
 
     aos::iam::certhandler::CertInfo certInfo;
 
-    auto err = mCertProvider->GetCertificate(mCfg->mVChan.mCertStorage, certInfo);
+    auto err = mCertProvider->GetCertificate(mCertStorage, certInfo);
     if (!err.IsNone()) {
         return err;
     }

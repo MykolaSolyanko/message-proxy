@@ -19,7 +19,7 @@
 /**
  * Communication channel class
  */
-class CommunicationChannel : public CommChannelItf, public AosProtocol {
+class CommunicationChannel : public CommChannelItf {
 public:
     /**
      * Constructor.

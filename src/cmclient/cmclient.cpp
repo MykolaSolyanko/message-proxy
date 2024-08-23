@@ -16,14 +16,15 @@
 
 aos::Error CMClient::Init(const Config& config, CertProviderItf& certProvider,
     aos::cryptoutils::CertLoaderItf& certLoader, aos::crypto::x509::ProviderItf& cryptoProvider,
-    aos::common::utils::BiDirectionalChannel<std::vector<uint8_t>>& channel, bool insecureConnection)
+    bool insecureConnection)
 {
     LOG_INF() << "Initializing CM client";
 
     mCertProvider   = &certProvider;
     mCertLoader     = &certLoader;
     mCryptoProvider = &cryptoProvider;
-    mMsgHandler     = &channel;
+    mUrl            = config.mCMConfig.mCMServerURL;
+    // mMsgHandler     = &channel;
 
     auto [credentials, err] = CreateCredentials(config.mCertStorage, insecureConnection);
     if (!err.IsNone()) {
@@ -32,21 +33,66 @@ aos::Error CMClient::Init(const Config& config, CertProviderItf& certProvider,
 
     mCredentials = credentials;
 
-    mCMThread = std::thread(&CMClient::RunCM, this, config.mCMConfig.mCMServerURL);
+    // mCMThread = std::thread(&CMClient::RunCM, this, config.mCMConfig.mCMServerURL);
 
-    mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
+    // mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
 
     return aos::ErrorEnum::eNone;
 }
 
 CMClient::~CMClient()
 {
-    LOG_INF() << "Shutting down CM client";
+    // Close();
+}
 
-    mShutdown = true;
+aos::Error CMClient::SendMessages(std::vector<uint8_t> messages)
+{
+    LOG_DBG() << "Sending messages";
+
+    return mOutgoingMsgChannel.Send(std::move(messages));
+}
+
+aos::RetWithError<std::vector<uint8_t>> CMClient::ReceiveMessages()
+{
+    LOG_DBG() << "Receiving messages";
+
+    return mIncomingMsgChannel.Receive();
+}
+
+void CMClient::OnConnected()
+{
+    std::lock_guard<std::mutex> lock {mMutex};
+
+    if (!mNotifyConnected) {
+        mNotifyConnected = true;
+
+        mCMThread                  = std::thread(&CMClient::RunCM, this, mUrl);
+        mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
+    }
+}
+
+void CMClient::OnDisconnected()
+{
+    Close();
+}
+
+/***********************************************************************************************************************
+ * Private
+ **********************************************************************************************************************/
+
+void CMClient::Close()
+{
+    LOG_INF() << "Shutting down CM client";
 
     {
         std::lock_guard<std::mutex> lock(mMutex);
+
+        if (mShutdown || !mNotifyConnected) {
+            return;
+        }
+
+        mShutdown        = true;
+        mNotifyConnected = false;
 
         if (mCtx) {
             mCtx->TryCancel();
@@ -54,6 +100,9 @@ CMClient::~CMClient()
 
         mCV.notify_all();
     }
+
+    mOutgoingMsgChannel.Close();
+    mIncomingMsgChannel.Close();
 
     if (mCMThread.joinable()) {
         mCMThread.join();
@@ -63,10 +112,6 @@ CMClient::~CMClient()
         mHandlerOutgoingMsgsThread.join();
     }
 }
-
-/***********************************************************************************************************************
- * Private
- **********************************************************************************************************************/
 
 aos::RetWithError<std::shared_ptr<grpc::ChannelCredentials>> CMClient::CreateCredentials(
     const std::string& certStorage, bool insecureConnection)
@@ -152,7 +197,7 @@ void CMClient::ProcessIncomingSMMessage()
 
         LOG_DBG() << "Sending message to handler";
 
-        if (auto err = mMsgHandler->Send(std::move(data)); !err.IsNone()) {
+        if (auto err = mIncomingMsgChannel.Send(std::move(data)); !err.IsNone()) {
             LOG_ERR() << "Failed to send message: error=" << err;
 
             return;
@@ -165,7 +210,7 @@ void CMClient::ProcessOutgoingSMMessages()
     LOG_DBG() << "Processing outgoing SM messages";
 
     while (!mShutdown) {
-        auto [msg, err] = mMsgHandler->Receive();
+        auto [msg, err] = mOutgoingMsgChannel.Receive();
         if (!err.IsNone()) {
             LOG_ERR() << "Failed to receive message: error=" << err;
 
