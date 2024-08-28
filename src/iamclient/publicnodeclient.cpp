@@ -30,9 +30,9 @@ aos::Error PublicNodeClient::Init(const IAMConfig& cfg, CertProviderItf& certPro
 
     mPublicServer = publicServer;
 
-    // mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, url);
+    mConnectionThread = std::thread(&PublicNodeClient::ConnectionLoop, this, mUrl);
 
-    // mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
+    mHandlerOutgoingMsgsThread = std::thread(&PublicNodeClient::ProcessOutgoingIAMMessages, this);
 
     return aos::ErrorEnum::eNone;
 }

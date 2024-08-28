@@ -33,9 +33,9 @@ aos::Error CMClient::Init(const Config& config, CertProviderItf& certProvider,
 
     mCredentials = credentials;
 
-    // mCMThread = std::thread(&CMClient::RunCM, this, config.mCMConfig.mCMServerURL);
+    mCMThread = std::thread(&CMClient::RunCM, this, config.mCMConfig.mCMServerURL);
 
-    // mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
+    mHandlerOutgoingMsgsThread = std::thread(&CMClient::ProcessOutgoingSMMessages, this);
 
     return aos::ErrorEnum::eNone;
 }

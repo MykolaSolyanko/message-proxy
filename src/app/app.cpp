@@ -109,45 +109,47 @@ void App::initialize(Application& self)
 
     mConfig = retConfig.mValue;
 
-    err = mIAMClient.Init(mConfig, mCertLoader, mCryptoProvider, mProvisioning);
-    AOS_ERROR_CHECK_AND_THROW("can't initialize IAM client", err);
+    if (!mProvisioning) {
+        err = mIAMClient.Init(mConfig, mCertLoader, mCryptoProvider, mProvisioning);
+        AOS_ERROR_CHECK_AND_THROW("can't initialize IAM client", err);
 
-    err = mCMClient.Init(mConfig, mIAMClient, mCertLoader, mCryptoProvider, mProvisioning);
-    AOS_ERROR_CHECK_AND_THROW("can't initialize CM client", err);
+        err = mCMClient.Init(mConfig, mIAMClient, mCertLoader, mCryptoProvider, mProvisioning);
+        AOS_ERROR_CHECK_AND_THROW("can't initialize CM client", err);
+    }
 
-    mVChanManager.emplace(mConfig);
+    // mVChanManager.emplace(mConfig);
 
     if (mProvisioning) {
-        if (err = mCommunicationManager.Init(mConfig, mVChanManager.value()); !err.IsNone()) {
-            AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
-        }
+        // if (err = mCommunicationManager.Init(mConfig, mVChanManager.value()); !err.IsNone()) {
+        //     AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
+        // }
 
-        if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager); !err.IsNone()) {
-            AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
-        }
+        // if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager); !err.IsNone()) {
+        //     AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
+        // }
     } else {
-        if (err
-            = mCommunicationManager.Init(mConfig, mVChanManager.value(), &mIAMClient, &mCertLoader, &mCryptoProvider);
-            !err.IsNone()) {
-            AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager", err);
-        }
+        // if (err
+        //     = mCommunicationManager.Init(mConfig, mVChanManager.value(), &mIAMClient, &mCertLoader,
+        //     &mCryptoProvider); !err.IsNone()) { AOS_ERROR_CHECK_AND_THROW("can't initialize communication manager",
+        //     err);
+        // }
 
-        if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager, &mIAMClient); !err.IsNone()) {
-            AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
-        }
+        // if (err = mCMConnection.Init(mConfig, mCMClient, mCommunicationManager, &mIAMClient); !err.IsNone()) {
+        //     AOS_ERROR_CHECK_AND_THROW("can't initialize CM connection", err);
+        // }
 
-        if (err = mIAMProtectedConnection.Init(mConfig.mIAMConfig.mSecurePort, mIAMClient.GetProtectedHandler(),
-                mCommunicationManager, &mIAMClient, mConfig.mVChan.mIAMCertStorage);
-            !err.IsNone()) {
-            AOS_ERROR_CHECK_AND_THROW("can't initialize IAM protected connection", err);
-        }
+        // if (err = mIAMProtectedConnection.Init(mConfig.mIAMConfig.mSecurePort, mIAMClient.GetProtectedHandler(),
+        //         mCommunicationManager, &mIAMClient, mConfig.mVChan.mIAMCertStorage);
+        //     !err.IsNone()) {
+        //     AOS_ERROR_CHECK_AND_THROW("can't initialize IAM protected connection", err);
+        // }
     }
 
-    if (err
-        = mIAMPublicConnection.Init(mConfig.mIAMConfig.mOpenPort, mIAMClient.GetPublicHandler(), mCommunicationManager);
-        !err.IsNone()) {
-        AOS_ERROR_CHECK_AND_THROW("can't initialize IAM public connection", err);
-    }
+    // if (err
+    //     = mIAMPublicConnection.Init(mConfig.mIAMConfig.mOpenPort, mIAMClient.GetPublicHandler(),
+    //     mCommunicationManager); !err.IsNone()) { AOS_ERROR_CHECK_AND_THROW("can't initialize IAM public connection",
+    //     err);
+    // }
 
     // Notify systemd
 
